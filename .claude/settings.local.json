@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm -v)",
+      "Bash(npm install *)",
+      "Bash(npm start *)",
+      "Bash(node -e \"const e = require\\('electron'\\); console.log\\(typeof e, e\\)\")",
+      "Bash(node_modules/.bin/electron --version)",
+      "Bash(node_modules/electron/dist/electron.exe --version)",
+      "Bash(node -e ' *)",
+      "Bash(\"c:/Users/우창개발/Desktop/직박구리/node_modules/electron/dist/electron.exe\" --version)",
+      "Bash(ELECTRON_MIRROR=\"https://npmmirror.com/mirrors/electron/\" node node_modules/electron/install.js)",
+      "Bash(node_modules/electron/dist/electron.exe test-main.js)",
+      "Bash(ELECTRON_RUN_AS_NODE=\"\" node_modules/electron/dist/electron.exe .)",
+      "Bash(node_modules/electron/dist/electron.exe .)",
+      "Bash(tasklist)",
+      "Bash(node_modules/electron/dist/electron.exe debug2.js)",
+      "Bash(node_modules/electron/dist/electron.exe test-electron.js)",
+      "Read(//tmp/**)",
+      "Bash(ELECTRON_RUN_AS_NODE=\"\" npm start)"
+    ],
+    "additionalDirectories": [
+      "\\tmp\\etest"
+    ]
+  }
+}
