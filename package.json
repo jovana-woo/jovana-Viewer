@@ -5,8 +5,8 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win",
-    "build:portable": "electron-builder --win portable"
+    "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
+    "build:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable"
   },
   "build": {
     "appId": "com.jovana.viewer",
@@ -38,6 +38,7 @@
     ]
   },
   "devDependencies": {
+    "cross-env": "^10.1.0",
     "electron": "^25.9.8",
     "electron-builder": "^25.0.0"
   },

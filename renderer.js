@@ -64,14 +64,82 @@ async function browseDir(dirPath) {
     return;
   }
 
+  function makeSep(dirPath) {
+    return dirPath.includes('/') ? '/' : '\\';
+  }
+
+  function makeActions(fullPath, name, isDir) {
+    const wrap = document.createElement('div');
+    wrap.className = 'explorer-actions';
+    wrap.addEventListener('click', e => e.stopPropagation());
+
+    // 이름 변경 버튼
+    const renBtn = document.createElement('button');
+    renBtn.className = 'explorer-action-btn';
+    renBtn.title = '이름 변경';
+    renBtn.textContent = '✏';
+    renBtn.addEventListener('click', async () => {
+      const nameEl = wrap.closest('.explorer-item').querySelector('.explorer-name');
+      const old = nameEl.textContent;
+      const input = document.createElement('input');
+      input.className = 'explorer-rename-input';
+      input.value = old;
+      nameEl.replaceWith(input);
+      input.select();
+      const commit = async () => {
+        const newName = input.value.trim();
+        if (newName && newName !== old) {
+          const res = await window.api.renameFile(fullPath, newName);
+          if (res.success) {
+            browseDir(dirPath);
+          } else {
+            alert('이름 변경 실패: ' + res.error);
+            input.replaceWith(nameEl);
+          }
+        } else {
+          input.replaceWith(nameEl);
+        }
+      };
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') commit();
+        if (e.key === 'Escape') input.replaceWith(nameEl);
+        e.stopPropagation();
+      });
+      input.addEventListener('blur', commit);
+      input.focus();
+    });
+    wrap.appendChild(renBtn);
+
+    // 삭제 버튼
+    const delBtn = document.createElement('button');
+    delBtn.className = 'explorer-action-btn explorer-del-btn';
+    delBtn.title = isDir ? '폴더 삭제' : '파일 삭제';
+    delBtn.textContent = '🗑';
+    delBtn.addEventListener('click', async () => {
+      const label = isDir ? `폴더 "${name}"` : `파일 "${name}"`;
+      if (!confirm(`${label}을(를) 휴지통으로 이동할까요?`)) return;
+      const res = await window.api.deleteFile(fullPath);
+      if (res.success) browseDir(dirPath);
+      else alert('삭제 실패: ' + res.error);
+    });
+    wrap.appendChild(delBtn);
+
+    return wrap;
+  }
+
   result.dirs.forEach(dir => {
     const item = document.createElement('div');
     item.className = 'explorer-item explorer-dir';
+    const sep = makeSep(dirPath);
+    const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + dir;
     item.innerHTML = `<span class="explorer-icon">📁</span><span class="explorer-name">${dir}</span>`;
     item.title = dir;
+    item.appendChild(makeActions(fullPath, dir, true));
     item.addEventListener('click', () => {
-      const sep = dirPath.includes('/') ? '/' : '\\';
-      browseDir(dirPath.replace(/[/\\]+$/, '') + sep + dir);
+      browseDir(fullPath);
+      loadPath(fullPath);
+      const sec = document.getElementById('section-pages');
+      if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
     });
     list.appendChild(item);
   });
@@ -81,13 +149,13 @@ async function browseDir(dirPath) {
     const icon = ['zip','cbz','cbr','rar'].includes(ext) ? '🗜' : '🖼';
     const item = document.createElement('div');
     item.className = 'explorer-item explorer-file';
+    const sep = makeSep(dirPath);
+    const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + file;
     item.innerHTML = `<span class="explorer-icon">${icon}</span><span class="explorer-name">${file}</span>`;
     item.title = file;
+    item.appendChild(makeActions(fullPath, file, false));
     item.addEventListener('click', () => {
-      const sep = dirPath.includes('/') ? '/' : '\\';
-      const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + file;
       loadPath(fullPath);
-      // 페이지 섹션이 접혀 있으면 펼치기
       const sec = document.getElementById('section-pages');
       if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
     });
@@ -122,7 +190,10 @@ async function loadPath(filePath) {
 
 async function loadZip(filePath) {
   const entries = await window.api.readZipList(filePath);
-  if (!entries.length) return;
+  if (!entries.length) {
+    alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
+    return;
+  }
   state.pages = entries.map(e => ({ type: 'zip', zipPath: filePath, entry: e }));
   state.current = 0;
   state.fileName = filePath.split(/[\\/]/).pop();
@@ -392,9 +463,16 @@ document.getElementById('btn-prev').addEventListener('click', goPrev);
 
 // ── 키보드 ────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
-  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown') {
+  // Space/Backspace가 버튼 활성화나 스크롤에 먹히는 걸 막기 위해 여기서 차단
+  if ((e.key === ' ' || e.key === 'Backspace') && e.target.tagName !== 'INPUT') {
+    e.preventDefault();
+  }
+}, { capture: true });
+
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
     e.preventDefault(); goNext();
-  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp') {
+  } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Backspace') {
     e.preventDefault(); goPrev();
   } else if (e.key === 'Home') {
     state.current = 0; render();
@@ -511,18 +589,76 @@ overlay.id = 'global-drop-overlay';
 overlay.textContent = '파일을 드롭하세요';
 document.body.appendChild(overlay);
 
-document.addEventListener('dragover', (e) => {
+let dragCounter = 0;
+document.addEventListener('dragover', (e) => { e.preventDefault(); });
+document.addEventListener('dragenter', (e) => {
   e.preventDefault();
+  dragCounter++;
   overlay.classList.add('visible');
 });
-document.addEventListener('dragleave', (e) => {
-  if (e.relatedTarget === null) overlay.classList.remove('visible');
+document.addEventListener('dragleave', () => {
+  dragCounter--;
+  if (dragCounter <= 0) { dragCounter = 0; overlay.classList.remove('visible'); }
 });
 document.addEventListener('drop', async (e) => {
   e.preventDefault();
+  dragCounter = 0;
   overlay.classList.remove('visible');
   const file = e.dataTransfer.files[0];
   if (file) await loadPath(file.path);
+});
+
+// ── 사이드바 수직 리사이즈 (탐색기/페이지 구분) ───────────
+const sidebarVResizer = document.getElementById('sidebar-v-resizer');
+const sectionExplorer = document.getElementById('section-explorer');
+let isVResizing = false;
+
+// 오른쪽 끝 근처(12px)에서 드래그하면 가로+세로 동시 조절
+sidebarVResizer.addEventListener('mousemove', (e) => {
+  const nearRight = Math.abs(e.clientX - sidebar.getBoundingClientRect().right) < 12;
+  sidebarVResizer.style.cursor = nearRight ? 'move' : 'row-resize';
+  resizer.classList.toggle('corner-hover', nearRight);
+  sidebarVResizer.classList.toggle('corner-hover', nearRight);
+});
+sidebarVResizer.addEventListener('mouseleave', () => {
+  sidebarVResizer.style.cursor = '';
+  resizer.classList.remove('corner-hover');
+  sidebarVResizer.classList.remove('corner-hover');
+});
+
+sidebarVResizer.addEventListener('mousedown', (e) => {
+  isVResizing = true;
+  sidebarVResizer.classList.add('dragging');
+  // 오른쪽 끝 근처면 가로 리사이즈도 함께 시작
+  const nearRight = Math.abs(e.clientX - sidebar.getBoundingClientRect().right) < 12;
+  if (nearRight) {
+    isResizing = true;
+    resizer.classList.add('dragging');
+  }
+  // 두 섹션 모두 강제 펼치기
+  document.getElementById('section-explorer').classList.remove('collapsed');
+  document.getElementById('section-pages').classList.remove('collapsed');
+  e.preventDefault();
+});
+document.addEventListener('mousemove', (e) => {
+  if (!isVResizing) return;
+  const sidebarEl = document.getElementById('sidebar');
+  const rect = sidebarEl.getBoundingClientRect();
+  const footerH = document.getElementById('sidebar-footer').offsetHeight;
+  const available = sidebarEl.clientHeight - footerH;
+  const newH = Math.max(60, Math.min(available - 60, e.clientY - rect.top));
+  sectionExplorer.style.flex = 'none';
+  sectionExplorer.style.height = newH + 'px';
+  document.getElementById('section-pages').style.flex = '1';
+  document.getElementById('section-pages').style.height = '';
+});
+document.addEventListener('mouseup', () => {
+  if (isVResizing) {
+    isVResizing = false;
+    sidebarVResizer.classList.remove('dragging');
+    isResizing = false;
+    resizer.classList.remove('dragging');
+  }
 });
 
 // ── 사이드바 리사이즈 ─────────────────────────────────────

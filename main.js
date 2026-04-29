@@ -4,6 +4,34 @@ const fs = require('fs');
 
 let mainWindow;
 
+// zip 캐시 (대용량 파일 반복 읽기 방지)
+const zipCache = new Map();    // filePath → JSZip
+const innerZipCache = new Map(); // 'outerPath::innerName' → JSZip
+
+async function getZip(filePath) {
+  if (!zipCache.has(filePath)) {
+    const JSZip = require('jszip');
+    const data = fs.readFileSync(filePath);
+    const zip = await JSZip.loadAsync(data);
+    zipCache.set(filePath, zip);
+    if (zipCache.size > 3) zipCache.delete(zipCache.keys().next().value);
+  }
+  return zipCache.get(filePath);
+}
+
+async function getInnerZip(outerPath, innerName) {
+  const key = outerPath + '::' + innerName;
+  if (!innerZipCache.has(key)) {
+    const outer = await getZip(outerPath);
+    const data = await outer.files[innerName].async('arraybuffer');
+    const JSZip = require('jszip');
+    const inner = await JSZip.loadAsync(data);
+    innerZipCache.set(key, inner);
+    if (innerZipCache.size > 10) innerZipCache.delete(innerZipCache.keys().next().value);
+  }
+  return innerZipCache.get(key);
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -83,32 +111,59 @@ ipcMain.handle('read-image', async (_, filePath) => {
   }
 });
 
-// zip 파일 내 이미지 목록 읽기
+// zip 파일 내 이미지 목록 읽기 (중첩 zip 지원)
 ipcMain.handle('read-zip-list', async (_, filePath) => {
-  const JSZip = require('jszip');
+  const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+  const zipExts = ['.zip', '.cbz'];
   try {
-    const data = fs.readFileSync(filePath);
-    const zip = await JSZip.loadAsync(data);
-    const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
-    const files = Object.keys(zip.files)
-      .filter(name => !zip.files[name].dir && exts.includes(path.extname(name).toLowerCase()))
+    const zip = await getZip(filePath);
+    const allEntries = Object.keys(zip.files).filter(n => !zip.files[n].dir);
+
+    // 1) 최상위에 이미지가 있으면 그대로 반환
+    const topImages = allEntries
+      .filter(n => imgExts.includes(path.extname(n).toLowerCase()))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-    return files;
+    if (topImages.length > 0) return topImages;
+
+    // 2) 내부에 zip/cbz 파일이 있으면 각각 열어서 이미지 수집
+    const innerZips = allEntries
+      .filter(n => zipExts.includes(path.extname(n).toLowerCase()))
+      .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+    const result = [];
+    for (const innerName of innerZips) {
+      try {
+        const inner = await getInnerZip(filePath, innerName);
+        const imgs = Object.keys(inner.files)
+          .filter(n => !inner.files[n].dir && imgExts.includes(path.extname(n).toLowerCase()))
+          .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+        imgs.forEach(img => result.push(innerName + '::' + img));
+      } catch {}
+    }
+    return result;
   } catch {
     return [];
   }
 });
 
-// zip 파일 내 특정 이미지 읽기
+// zip 파일 내 특정 이미지 읽기 (중첩 zip 지원: 'inner.zip::image.jpg')
 ipcMain.handle('read-zip-image', async (_, filePath, entryName) => {
-  const JSZip = require('jszip');
   try {
-    const data = fs.readFileSync(filePath);
-    const zip = await JSZip.loadAsync(data);
-    const file = zip.files[entryName];
+    let file;
+    let entryForExt = entryName;
+    if (entryName.includes('::')) {
+      const sep = entryName.indexOf('::');
+      const innerZipName = entryName.slice(0, sep);
+      const innerEntry  = entryName.slice(sep + 2);
+      const inner = await getInnerZip(filePath, innerZipName);
+      file = inner.files[innerEntry];
+      entryForExt = innerEntry;
+    } else {
+      const zip = await getZip(filePath);
+      file = zip.files[entryName];
+    }
     if (!file) return null;
     const imgData = await file.async('base64');
-    const ext = path.extname(entryName).toLowerCase().replace('.', '');
+    const ext = path.extname(entryForExt).toLowerCase().replace('.', '');
     const mime = ext === 'jpg' || ext === 'jpeg' ? 'jpeg' : ext;
     return `data:image/${mime};base64,${imgData}`;
   } catch {
@@ -137,6 +192,18 @@ ipcMain.handle('delete-file', async (_, filePath) => {
   try {
     await shell.trashItem(filePath);
     return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
+// 파일/폴더 이름 변경
+ipcMain.handle('rename-file', async (_, oldPath, newName) => {
+  try {
+    const dir = path.dirname(oldPath);
+    const newPath = path.join(dir, newName);
+    fs.renameSync(oldPath, newPath);
+    return { success: true, newPath };
   } catch (e) {
     return { success: false, error: e.message };
   }

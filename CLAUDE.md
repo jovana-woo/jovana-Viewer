@@ -97,6 +97,7 @@
 ```bash
 # Windows 터미널(cmd/PowerShell/VS Code 터미널)에서:
 cd "C:\Users\우창개발\Desktop\Jovana Viewer"
+
 npm start
 ```
 

@@ -10,6 +10,7 @@ contextBridge.exposeInMainWorld('api', {
   getFileType: (filePath) => ipcRenderer.invoke('get-file-type', filePath),
   readDirEntries: (dirPath) => ipcRenderer.invoke('read-dir-entries', dirPath),
   deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),
+  renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', oldPath, newName),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
   exitFullscreen: () => ipcRenderer.invoke('exit-fullscreen'),
   isFullscreen: () => ipcRenderer.invoke('is-fullscreen'),
