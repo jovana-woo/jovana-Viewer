@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Jovana Viewer</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 사이드바 -->
+  <div id="sidebar">
+
+    <!-- 탐색기 섹션 -->
+    <div class="sidebar-section" id="section-explorer">
+      <div class="section-header" id="section-explorer-header">
+        <span class="section-chevron">▼</span>
+        <span class="section-title">탐색기</span>
+        <div class="section-actions">
+          <button class="icon-btn" id="btn-open-file" title="파일 열기">📄</button>
+          <button class="icon-btn" id="btn-open-folder" title="폴더 열기">📁</button>
+        </div>
+      </div>
+      <div class="section-body" id="explorer-body">
+        <div id="explorer-path-bar">
+          <button class="icon-btn" id="btn-up" title="상위 폴더">↑</button>
+          <span id="explorer-path-label" title="">—</span>
+        </div>
+        <div id="explorer-list">
+          <div class="empty-hint">파일 또는 폴더를 열면<br/>해당 위치로 이동합니다</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 페이지 섹션 -->
+    <div class="sidebar-section" id="section-pages">
+      <div class="section-header" id="section-pages-header">
+        <span class="section-chevron">▼</span>
+        <span class="section-title">페이지</span>
+      </div>
+      <div class="section-body" id="pages-body">
+        <div id="file-list">
+          <div class="empty-hint">파일 또는 폴더를 여세요<br/><small>여기에 드래그하거나<br/>위 버튼을 클릭하세요</small></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="sidebar-footer">
+      <span id="page-info">—</span>
+    </div>
+  </div>
+
+  <!-- 리사이저 -->
+  <div id="resizer"></div>
+
+  <!-- 메인 영역 -->
+  <div id="main">
+    <!-- 탭바 -->
+    <div id="tabbar">
+      <div id="tab-title">Jovana Viewer</div>
+      <div id="toolbar">
+        <button class="tool-btn" id="btn-prev" title="이전 페이지 (←)">&#8592;</button>
+        <span id="page-counter">—</span>
+        <button class="tool-btn" id="btn-next" title="다음 페이지 (→)">&#8594;</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-fit-width" title="너비 맞춤">↔</button>
+        <button class="tool-btn" id="btn-fit-height" title="높이 맞춤">↕</button>
+        <button class="tool-btn active" id="btn-fit-page" title="페이지 맞춤">⊡</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-zoom-out" title="축소 (-)">－</button>
+        <span id="zoom-level">100%</span>
+        <button class="tool-btn" id="btn-zoom-in" title="확대 (+)">＋</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-rotate" title="회전 (R)">↻</button>
+        <button class="tool-btn" id="btn-rtl" title="오른쪽→왼쪽 읽기 방향">↩ RTL</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-single" title="한 장 보기">▣</button>
+        <button class="tool-btn active" id="btn-double" title="두 장 보기">⧈</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-fullscreen" title="전체화면 (F11)">⛶</button>
+      </div>
+    </div>
+
+    <!-- 뷰어 -->
+    <div id="viewer" tabindex="0">
+      <div id="viewer-inner">
+        <div id="drop-zone">
+          <div class="drop-hint">
+            <div class="drop-icon">🖼</div>
+            <div>파일을 여기에 드래그하거나</div>
+            <div><b>왼쪽 사이드바</b>에서 파일을 여세요</div>
+            <div class="drop-sub">지원: JPG, PNG, ZIP, CBZ</div>
+          </div>
+        </div>
+        <div id="pages-container">
+          <img id="page-left" class="page-img" src="" alt="" />
+          <img id="page-right" class="page-img" src="" alt="" />
+        </div>
+      </div>
+    </div>
+
+    <!-- 상태바 -->
+    <div id="statusbar">
+      <span id="status-file">파일 없음</span>
+      <span class="status-sep">|</span>
+      <span id="status-pages">0 / 0</span>
+      <span class="status-sep">|</span>
+      <span id="status-mode">두 장 보기</span>
+      <span class="status-sep">|</span>
+      <span id="status-zoom">100%</span>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>

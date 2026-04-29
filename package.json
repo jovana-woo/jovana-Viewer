@@ -1,0 +1,47 @@
+{
+  "name": "jovana-viewer",
+  "version": "1.0.0",
+  "description": "Jovana Viewer - Comic Book Reader",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable"
+  },
+  "build": {
+    "appId": "com.jovana.viewer",
+    "productName": "Jovana Viewer",
+    "directories": {
+      "output": "dist"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    },
+    "files": [
+      "**/*",
+      "!dist/**",
+      "!node_modules/.cache/**"
+    ]
+  },
+  "devDependencies": {
+    "electron": "^25.9.8",
+    "electron-builder": "^25.0.0"
+  },
+  "dependencies": {
+    "jszip": "^3.10.1"
+  }
+}
