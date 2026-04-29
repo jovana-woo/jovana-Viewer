@@ -470,6 +470,55 @@ body {
   margin: 0 4px;
 }
 
+/* 최근 파일 / 드롭존 내부 */
+#drop-zone-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 28px;
+}
+#recent-section { width: 100%; max-width: 380px; }
+.recent-title {
+  color: var(--subtext0);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+  padding: 0 4px;
+}
+.recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  cursor: pointer;
+  color: var(--subtext1);
+  font-size: 12px;
+  border-radius: 4px;
+  overflow: hidden;
+}
+.recent-item:hover { background: var(--surface0); color: var(--text); }
+.recent-item-icon { flex-shrink: 0; font-size: 14px; }
+.recent-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+.recent-item-dir { color: var(--overlay0); font-size: 10px; flex-shrink: 0; max-width: 140px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* 페이지 점프 입력 */
+#page-counter { cursor: pointer; }
+#page-counter:hover { color: var(--text); }
+#page-jump-input {
+  width: 52px;
+  background: var(--surface0);
+  border: 1px solid var(--mauve);
+  color: var(--text);
+  font-size: 12px;
+  text-align: center;
+  border-radius: 3px;
+  outline: none;
+  padding: 1px 2px;
+  min-width: 0;
+}
+
 /* 뷰어 */
 #viewer {
   flex: 1;

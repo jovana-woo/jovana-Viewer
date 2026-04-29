@@ -1,14 +1,54 @@
 // ── 상태 ──────────────────────────────────────────────────
 const state = {
-  pages: [],          // { src: 'path or zip:entry', type: 'file'|'zip', zipPath: '' }
-  current: 0,         // 현재 페이지 인덱스 (0-based)
-  doubleView: true,   // 두 장 보기
-  fitMode: 'page',    // 'width' | 'height' | 'page'
+  pages: [],
+  current: 0,
+  doubleView: true,
+  fitMode: 'page',
   zoom: 1.0,
-  rotation: 0,        // 0, 90, 180, 270
-  rtl: false,         // 오른쪽→왼쪽 읽기
-  fileName: ''
+  rotation: 0,
+  rtl: false,
+  fileName: '',
+  progressKey: ''
 };
+
+// ── 진행상황 저장 ─────────────────────────────────────────
+function saveProgress(key, idx) {
+  try { localStorage.setItem('pg:' + key, idx); } catch {}
+}
+function loadProgress(key) {
+  try { const v = localStorage.getItem('pg:' + key); return v !== null ? parseInt(v) : 0; } catch { return 0; }
+}
+
+// ── 최근 파일 ─────────────────────────────────────────────
+function saveRecent(path, name, type) {
+  try {
+    let recents = JSON.parse(localStorage.getItem('recents') || '[]');
+    recents = recents.filter(r => r.path !== path);
+    recents.unshift({ path, name, type, ts: Date.now() });
+    localStorage.setItem('recents', JSON.stringify(recents.slice(0, 8)));
+  } catch {}
+}
+function buildRecentList() {
+  try {
+    const recents = JSON.parse(localStorage.getItem('recents') || '[]');
+    const section = document.getElementById('recent-section');
+    const list = document.getElementById('recent-list');
+    if (!recents.length) { section.style.display = 'none'; return; }
+    section.style.display = '';
+    list.innerHTML = '';
+    recents.forEach(r => {
+      const item = document.createElement('div');
+      item.className = 'recent-item';
+      const icon = r.type === 'folder' ? '📁' : r.type === 'zip' ? '🗜' : '🖼';
+      const dir = r.path.substring(0, Math.max(r.path.lastIndexOf('/'), r.path.lastIndexOf('\\')) + 1)
+        .split(/[\\/]/).filter(Boolean).pop() || '';
+      item.innerHTML = `<span class="recent-item-icon">${icon}</span><span class="recent-item-name">${r.name}</span><span class="recent-item-dir">${dir}</span>`;
+      item.title = r.path;
+      item.addEventListener('click', () => loadPath(r.path));
+      list.appendChild(item);
+    });
+  } catch {}
+}
 
 // ── DOM ───────────────────────────────────────────────────
 const viewer        = document.getElementById('viewer');
@@ -307,9 +347,11 @@ async function loadZip(filePath) {
     return;
   }
   state.pages = entries.map(e => ({ type: 'zip', zipPath: filePath, entry: e }));
-  state.current = 0;
   state.rotation = 0;
+  state.progressKey = filePath;
+  state.current = Math.min(loadProgress(filePath), entries.length - 1);
   state.fileName = filePath.split(/[\\/]/).pop();
+  saveRecent(filePath, state.fileName, 'zip');
   tabTitle.textContent = state.fileName;
   buildSidebar();
   await render();
@@ -319,16 +361,17 @@ async function loadFolder(folderPath) {
   const files = await window.api.readFolder(folderPath);
   if (!files.length) return;
   state.pages = files.map(f => ({ type: 'file', src: f }));
-  state.current = 0;
   state.rotation = 0;
+  state.progressKey = folderPath;
+  state.current = Math.min(loadProgress(folderPath), files.length - 1);
   state.fileName = folderPath.split(/[\\/]/).pop();
+  saveRecent(folderPath, state.fileName, 'folder');
   tabTitle.textContent = state.fileName;
   buildSidebar();
   await render();
 }
 
 async function loadImageFile(filePath) {
-  // 같은 폴더의 이미지 모두 불러오기
   const folder = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
   const files = await window.api.readFolder(folder);
   if (files.length) {
@@ -340,7 +383,9 @@ async function loadImageFile(filePath) {
     state.current = 0;
   }
   state.rotation = 0;
+  state.progressKey = folder;
   state.fileName = filePath.split(/[\\/]/).pop();
+  saveRecent(filePath, state.fileName, 'image');
   tabTitle.textContent = state.fileName;
   buildSidebar();
   await render();
@@ -393,6 +438,7 @@ async function render() {
   updateUI();
   highlightSidebar();
   viewer.scrollTo(0, 0);
+  if (state.progressKey) saveProgress(state.progressKey, state.current);
 }
 
 function applyTransform() {
@@ -482,7 +528,43 @@ function updateUI() {
 }
 
 // ── 사이드바 썸네일 ───────────────────────────────────────
+let thumbObserver = null;
+
+async function makeThumbnail(src) {
+  return new Promise(resolve => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 28; canvas.height = 36;
+      const ctx = canvas.getContext('2d');
+      const aspect = img.width / img.height;
+      const target = 28 / 36;
+      let sx, sy, sw, sh;
+      if (aspect > target) { sh = img.height; sw = sh * target; sx = (img.width - sw) / 2; sy = 0; }
+      else { sw = img.width; sh = sw / target; sx = 0; sy = (img.height - sh) / 2; }
+      ctx.drawImage(img, sx, sy, sw, sh, 0, 0, 28, 36);
+      resolve(canvas.toDataURL('image/jpeg', 0.6));
+    };
+    img.onerror = () => resolve('');
+    img.src = src;
+  });
+}
+
 function buildSidebar() {
+  if (thumbObserver) thumbObserver.disconnect();
+  thumbObserver = new IntersectionObserver(async (entries) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      const thumb = entry.target;
+      const idx = parseInt(thumb.dataset.idx);
+      const page = state.pages[idx];
+      if (!page) continue;
+      thumbObserver.unobserve(thumb);
+      const raw = await loadPageImage(page);
+      if (raw) thumb.src = await makeThumbnail(raw);
+    }
+  }, { root: fileList, rootMargin: '120px' });
+
   fileList.innerHTML = '';
   state.pages.forEach((page, i) => {
     const item = document.createElement('div');
@@ -493,18 +575,19 @@ function buildSidebar() {
     num.className = 'page-num';
     num.textContent = i + 1;
 
+    const thumb = document.createElement('img');
+    thumb.className = 'thumb';
+    thumb.dataset.idx = i;
+    thumbObserver.observe(thumb);
+
     const name = document.createElement('span');
-    name.style.overflow = 'hidden';
-    name.style.textOverflow = 'ellipsis';
-    name.style.whiteSpace = 'nowrap';
-    name.style.flex = '1';
+    name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
     const label = page.type === 'zip'
       ? page.entry.split('/').pop()
       : page.src.split(/[\\/]/).pop();
     name.textContent = label;
     name.title = label;
 
-    // 삭제 버튼 (zip 내부 파일은 삭제 불가)
     const delBtn = document.createElement('button');
     delBtn.className = 'file-del-btn';
     delBtn.textContent = '✕';
@@ -517,30 +600,21 @@ function buildSidebar() {
       if (!confirm(`"${fileName}" 을 휴지통으로 이동하시겠습니까?`)) return;
       const result = await window.api.deleteFile(page.src);
       if (result.success) {
-        // pages 배열에서 제거하고 current 보정
         state.pages.splice(i, 1);
-        if (state.current >= state.pages.length) {
-          state.current = Math.max(0, state.pages.length - 1);
-        }
+        if (state.current >= state.pages.length) state.current = Math.max(0, state.pages.length - 1);
         buildSidebar();
         if (state.pages.length > 0) render();
-        else {
-          dropZone.style.display = 'flex';
-          pagesContainer.style.display = 'none';
-          updateUI();
-        }
+        else { dropZone.style.display = 'flex'; pagesContainer.style.display = 'none'; updateUI(); }
       } else {
         alert('삭제 실패: ' + result.error);
       }
     });
 
     item.appendChild(num);
+    item.appendChild(thumb);
     item.appendChild(name);
     item.appendChild(delBtn);
-    item.addEventListener('click', () => {
-      state.current = i;
-      render();
-    });
+    item.addEventListener('click', () => { state.current = i; render(); });
     fileList.appendChild(item);
   });
 }
@@ -576,6 +650,35 @@ function goPrev() {
 
 document.getElementById('btn-next').addEventListener('click', goNext);
 document.getElementById('btn-prev').addEventListener('click', goPrev);
+
+// 페이지 카운터 클릭 → 페이지 점프
+pageCounter.addEventListener('click', () => {
+  if (!state.pages.length) return;
+  const total = state.pages.length;
+  const input = document.createElement('input');
+  input.id = 'page-jump-input';
+  input.type = 'number';
+  input.min = 1;
+  input.max = total;
+  input.value = state.current + 1;
+  pageCounter.replaceWith(input);
+  input.select();
+  const commit = (jump) => {
+    input.replaceWith(pageCounter);
+    if (jump) {
+      let val = Math.max(1, Math.min(total, parseInt(input.value) || state.current + 1));
+      state.current = val - 1;
+      if (state.doubleView && state.current % 2 !== 0) state.current = Math.max(0, state.current - 1);
+      render();
+    }
+  };
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') commit(true);
+    if (e.key === 'Escape') commit(false);
+    e.stopPropagation();
+  });
+  input.addEventListener('blur', () => commit(false));
+});
 
 // ── 키보드 ────────────────────────────────────────────────
 document.addEventListener('keydown', (e) => {
@@ -856,3 +959,6 @@ document.addEventListener('mouseup', () => {
 window.addEventListener('resize', () => {
   if (state.pages.length) applyTransform();
 });
+
+// ── 초기화 ────────────────────────────────────────────────
+buildRecentList();

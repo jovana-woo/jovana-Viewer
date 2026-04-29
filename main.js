@@ -191,6 +191,10 @@ ipcMain.handle('is-fullscreen', () => {
 ipcMain.handle('delete-file', async (_, filePath) => {
   try {
     await shell.trashItem(filePath);
+    zipCache.delete(filePath);
+    for (const k of [...innerZipCache.keys()]) {
+      if (k.startsWith(filePath + '::')) innerZipCache.delete(k);
+    }
     return { success: true };
   } catch (e) {
     return { success: false, error: e.message };
@@ -203,6 +207,11 @@ ipcMain.handle('rename-file', async (_, oldPath, newName) => {
     const dir = path.dirname(oldPath);
     const newPath = path.join(dir, newName);
     fs.renameSync(oldPath, newPath);
+    // 캐시 무효화
+    zipCache.delete(oldPath);
+    for (const k of [...innerZipCache.keys()]) {
+      if (k.startsWith(oldPath + '::')) innerZipCache.delete(k);
+    }
     return { success: true, newPath };
   } catch (e) {
     return { success: false, error: e.message };

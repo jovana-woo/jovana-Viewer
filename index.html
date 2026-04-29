@@ -102,11 +102,17 @@
     <div id="viewer" tabindex="0">
       <div id="viewer-inner">
         <div id="drop-zone">
-          <div class="drop-hint">
-            <div class="drop-icon">🖼</div>
-            <div>파일을 여기에 드래그하거나</div>
-            <div><b>왼쪽 사이드바</b>에서 파일을 여세요</div>
-            <div class="drop-sub">지원: JPG, PNG, ZIP, CBZ</div>
+          <div id="drop-zone-inner">
+            <div class="drop-hint">
+              <div class="drop-icon">🖼</div>
+              <div>파일을 여기에 드래그하거나</div>
+              <div><b>왼쪽 사이드바</b>에서 파일을 여세요</div>
+              <div class="drop-sub">지원: JPG, PNG, ZIP, CBZ</div>
+            </div>
+            <div id="recent-section" style="display:none">
+              <div class="recent-title">최근 파일</div>
+              <div id="recent-list"></div>
+            </div>
           </div>
         </div>
         <div id="pages-container">
