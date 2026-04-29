@@ -42,7 +42,18 @@ function buildRecentList() {
       const icon = r.type === 'folder' ? '📁' : r.type === 'zip' ? '🗜' : '🖼';
       const dir = r.path.substring(0, Math.max(r.path.lastIndexOf('/'), r.path.lastIndexOf('\\')) + 1)
         .split(/[\\/]/).filter(Boolean).pop() || '';
-      item.innerHTML = `<span class="recent-item-icon">${icon}</span><span class="recent-item-name">${r.name}</span><span class="recent-item-dir">${dir}</span>`;
+      const iconEl = document.createElement('span');
+      iconEl.className = 'recent-item-icon';
+      iconEl.textContent = icon;
+      const nameEl = document.createElement('span');
+      nameEl.className = 'recent-item-name';
+      nameEl.textContent = r.name || '';
+      const dirEl = document.createElement('span');
+      dirEl.className = 'recent-item-dir';
+      dirEl.textContent = dir;
+      item.appendChild(iconEl);
+      item.appendChild(nameEl);
+      item.appendChild(dirEl);
       item.title = r.path;
       item.addEventListener('click', () => loadPath(r.path));
       list.appendChild(item);
@@ -263,7 +274,14 @@ async function browseDir(dirPath) {
     item.className = 'explorer-item explorer-dir';
     const sep = makeSep(dirPath);
     const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + dir;
-    item.innerHTML = `<span class="explorer-icon">📁</span><span class="explorer-name">${dir}</span>`;
+    const iconEl = document.createElement('span');
+    iconEl.className = 'explorer-icon';
+    iconEl.textContent = '📁';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'explorer-name';
+    nameEl.textContent = dir;
+    item.appendChild(iconEl);
+    item.appendChild(nameEl);
     item.title = dir;
     item.appendChild(makeActions(fullPath, dir, true));
     item.addEventListener('click', () => {
@@ -286,7 +304,14 @@ async function browseDir(dirPath) {
       item.classList.add('active');
     }
     item.dataset.filename = file;
-    item.innerHTML = `<span class="explorer-icon">${icon}</span><span class="explorer-name">${file}</span>`;
+    const iconEl = document.createElement('span');
+    iconEl.className = 'explorer-icon';
+    iconEl.textContent = icon;
+    const nameEl = document.createElement('span');
+    nameEl.className = 'explorer-name';
+    nameEl.textContent = file;
+    item.appendChild(iconEl);
+    item.appendChild(nameEl);
     item.title = file;
     item.appendChild(makeActions(fullPath, file, false));
     item.addEventListener('click', () => {
@@ -326,6 +351,8 @@ document.addEventListener('click', () => openDropdown.classList.remove('visible'
 
 
 async function loadPath(filePath) {
+  // 쓰기 계열 IPC(delete/rename/save)의 허용 루트를 현재 열람 경로로 등록
+  await window.api.setActiveRoot(filePath);
   const type = await window.api.getFileType(filePath);
   explorerState.currentFile = type !== 'folder' ? filePath : null;
   const folder = type === 'folder' ? filePath

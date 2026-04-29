@@ -11,7 +11,7 @@
 ## 파일 구조
 
 ```
-직박구리/
+Jovana Viewer/
 ├── main.js          # Electron 메인 프로세스 (IPC 핸들러, 창 생성)
 ├── preload.js       # contextBridge — 렌더러에 api 객체 노출
 ├── index.html       # UI 골격 (사이드바 + 뷰어 + 탭바 + 상태바)
@@ -147,11 +147,28 @@ npm run build
 
 ### 체크리스트 (릴리즈 전)
 
-- 악성 파일명(`..`, 슬래시 포함) 리네임 시도가 거부되는가
-- 초대형 zip/cbz 로드 시 앱이 멈추지 않고 안전하게 실패하는가
-- 특수문자 파일명 표시 시 UI가 깨지거나 HTML이 삽입되지 않는가
-- 삭제/저장이 의도한 경로에서만 동작하는가
-- 오류 상황에서도 앱 프로세스가 종료되지 않는가
+- [o] 악성 파일명(`..`, 슬래시 포함) 리네임 시도가 거부되는가
+- [o] 초대형 zip/cbz 로드 시 앱이 멈추지 않고 안전하게 실패하는가
+- [o] 특수문자 파일명 표시 시 UI가 깨지거나 HTML이 삽입되지 않는가
+- [o] 삭제/저장 IPC에 비정상 입력 검증이 적용되는가
+- [o] 삭제/저장이 의도한 경로 범위 내에서만 동작하는가 (열린 루트 기준 제한)
+- [o] 오류 상황에서도 앱 프로세스가 종료되지 않고 안전하게 실패하는가
+
+### 적용 메모 (2026-04-29)
+
+- `main.js`
+  - 경로/입력 검증 유틸 추가 (`isSafePathInput`, `isSafeNewName`)
+  - 허용 루트 관리 추가 (`set-active-root`, `allowedRoots`)
+  - 삭제/이름변경/저장을 허용 루트 내부 경로로 제한
+  - `rename-file`, `delete-file`, `save-image`, `read-dir-entries`, `get-file-type` 입력 검증 추가
+  - zip/image 크기 및 엔트리 수 제한(`LIMITS`) 추가
+  - 비정상/과대 입력은 `null` 또는 `{ success:false }`로 안전 실패 처리
+- `preload.js`
+  - `setActiveRoot()` API 추가
+- `renderer.js`
+  - `loadPath()` 시작 시 `setActiveRoot(filePath)` 호출로 현재 열람 루트 등록
+  - 파일명/경로 표시 구간 일부를 `innerHTML`에서 `textContent` 기반 DOM 생성으로 변경
+  - 대상: 최근 파일 목록, 탐색기 폴더/파일 목록 렌더링
 
 ## 알려진 이슈 / TODO
 
