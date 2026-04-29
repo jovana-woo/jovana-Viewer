@@ -229,6 +229,17 @@ ipcMain.handle('read-dir-entries', async (_, dirPath) => {
   }
 });
 
+// 이미지 파일 저장 (회전 후 덮어쓰기)
+ipcMain.handle('save-image', async (_, filePath, dataUrl) => {
+  try {
+    const base64 = dataUrl.replace(/^data:image\/\w+;base64,/, '');
+    fs.writeFileSync(filePath, Buffer.from(base64, 'base64'));
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+});
+
 // 파일 드롭 처리
 ipcMain.handle('get-file-type', async (_, filePath) => {
   const ext = path.extname(filePath).toLowerCase();

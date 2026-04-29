@@ -16,14 +16,28 @@
         <span class="section-chevron">▼</span>
         <span class="section-title">탐색기</span>
         <div class="section-actions">
-          <button class="icon-btn" id="btn-open-file" title="파일 열기">📄</button>
-          <button class="icon-btn" id="btn-open-folder" title="폴더 열기">📁</button>
+          <div id="open-btn-wrap">
+            <button class="icon-btn" id="btn-open-file" title="파일/폴더 열기">📁</button>
+            <div id="open-dropdown">
+              <div id="open-dropdown-file">📄 파일 열기</div>
+              <div id="open-dropdown-folder">📁 폴더 열기</div>
+            </div>
+          </div>
         </div>
       </div>
       <div class="section-body" id="explorer-body">
         <div id="explorer-path-bar">
           <button class="icon-btn" id="btn-up" title="상위 폴더">↑</button>
           <span id="explorer-path-label" title="">—</span>
+          <button class="icon-btn" id="btn-bulk-rename" title="파일 일괄 이름 변경" style="display:none">✏</button>
+        </div>
+        <div id="bulk-rename-bar" style="display:none">
+          <div id="bulk-rename-hint"></div>
+          <div id="bulk-rename-row">
+            <input id="bulk-rename-input" type="text" placeholder="새 파일명 앞부분" spellcheck="false" />
+            <button class="icon-btn" id="bulk-rename-confirm" title="적용">✓</button>
+            <button class="icon-btn" id="bulk-rename-cancel" title="취소">✕</button>
+          </div>
         </div>
         <div id="explorer-list">
           <div class="empty-hint">파일 또는 폴더를 열면<br/>해당 위치로 이동합니다</div>
@@ -74,6 +88,7 @@
         <button class="tool-btn" id="btn-zoom-in" title="확대 (+)">＋</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn" id="btn-rotate" title="회전 (R)">↻</button>
+        <button class="tool-btn" id="btn-save-rotation" title="회전 저장 (현재 페이지)" disabled>💾</button>
         <button class="tool-btn" id="btn-rtl" title="오른쪽→왼쪽 읽기 방향">↩ RTL</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn" id="btn-single" title="한 장 보기">▣</button>

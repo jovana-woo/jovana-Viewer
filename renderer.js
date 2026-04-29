@@ -28,7 +28,7 @@ const pageInfo      = document.getElementById('page-info');
 const tabTitle      = document.getElementById('tab-title');
 
 // ── 탐색기 ────────────────────────────────────────────────
-const explorerState = { path: null, parent: null };
+const explorerState = { path: null, parent: null, currentFile: null, files: [] };
 
 function toggleSection(id) {
   document.getElementById(id).classList.toggle('collapsed');
@@ -45,10 +45,101 @@ document.getElementById('btn-up').addEventListener('click', () => {
   if (explorerState.parent) browseDir(explorerState.parent);
 });
 
+let bulkParsed = [];
+
+function openBulkRenameBar() {
+  if (!explorerState.path || !explorerState.files.length) return;
+  document.getElementById('bulk-rename-bar').style.display = '';
+
+  // 파일 아이템마다 체크박스 삽입
+  document.querySelectorAll('#explorer-list .explorer-file').forEach(item => {
+    if (item.querySelector('.bulk-cb')) return;
+    const cb = document.createElement('input');
+    cb.type = 'checkbox';
+    cb.className = 'bulk-cb';
+    cb.checked = true;
+    cb.addEventListener('change', updateBulkPreview);
+    cb.addEventListener('click', e => e.stopPropagation());
+    item.insertBefore(cb, item.firstChild);
+  });
+
+  updateBulkPreview();
+}
+
+function updateBulkPreview() {
+  const checkedItems = [...document.querySelectorAll('#explorer-list .explorer-file')]
+    .filter(item => item.querySelector('.bulk-cb')?.checked);
+
+  if (!checkedItems.length) {
+    document.getElementById('bulk-rename-hint').textContent = '파일을 선택하세요';
+    document.getElementById('bulk-rename-input').value = '';
+    bulkParsed = [];
+    return;
+  }
+
+  const parsed = checkedItems.map(item => {
+    const f = item.dataset.filename;
+    const m = f.match(/^(.*?)(\d.*)$/);  // 첫 번째 숫자 이후를 suffix로 통째로 보존
+    return m ? { original: f, prefix: m[1], suffix: m[2] } : null;
+  }).filter(Boolean);
+
+  bulkParsed = parsed;
+
+  if (!parsed.length) {
+    document.getElementById('bulk-rename-hint').textContent = '숫자가 포함된 파일이 없습니다';
+    return;
+  }
+
+  const commonPrefix = parsed.reduce((acc, p) => {
+    let i = 0;
+    while (i < acc.length && i < p.prefix.length && acc[i] === p.prefix[i]) i++;
+    return acc.slice(0, i);
+  }, parsed[0].prefix);
+
+  document.getElementById('bulk-rename-hint').textContent =
+    `${parsed.length}개 파일  ·  예시: (새이름)${parsed[0].suffix}`;
+  const input = document.getElementById('bulk-rename-input');
+  input.value = commonPrefix.trimEnd();
+}
+
+async function applyBulkRename() {
+  if (!bulkParsed.length) { closeBulkRenameBar(); return; }
+  const trimmed = document.getElementById('bulk-rename-input').value.trimEnd();
+  const sep = explorerState.path.includes('/') ? '/' : '\\';
+  const base = explorerState.path.replace(/[/\\]+$/, '');
+  let failed = 0;
+  for (const p of bulkParsed) {
+    const newName = trimmed + p.suffix;
+    const fullPath = base + sep + p.original;
+    const res = await window.api.renameFile(fullPath, newName);
+    if (!res.success) failed++;
+  }
+  closeBulkRenameBar();
+  if (failed > 0) alert(`${failed}개 파일 이름 변경 실패`);
+  browseDir(explorerState.path);
+}
+
+function closeBulkRenameBar() {
+  document.getElementById('bulk-rename-bar').style.display = 'none';
+  document.querySelectorAll('#explorer-list .bulk-cb').forEach(cb => cb.remove());
+  bulkParsed = [];
+}
+
+document.getElementById('btn-bulk-rename').addEventListener('click', openBulkRenameBar);
+document.getElementById('bulk-rename-confirm').addEventListener('click', applyBulkRename);
+document.getElementById('bulk-rename-cancel').addEventListener('click', closeBulkRenameBar);
+document.getElementById('bulk-rename-input').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') applyBulkRename();
+  if (e.key === 'Escape') closeBulkRenameBar();
+  e.stopPropagation();
+});
+
 async function browseDir(dirPath) {
   const result = await window.api.readDirEntries(dirPath);
   explorerState.path = dirPath;
   explorerState.parent = result.parent;
+  explorerState.files = result.files;
+  document.getElementById('btn-bulk-rename').style.display = result.files.length ? '' : 'none';
 
   const pathLabel = document.getElementById('explorer-path-label');
   const folderName = dirPath.split(/[\\/]/).filter(Boolean).pop() || dirPath;
@@ -151,6 +242,10 @@ async function browseDir(dirPath) {
     item.className = 'explorer-item explorer-file';
     const sep = makeSep(dirPath);
     const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + file;
+    if (explorerState.currentFile && fullPath.toLowerCase() === explorerState.currentFile.toLowerCase()) {
+      item.classList.add('active');
+    }
+    item.dataset.filename = file;
     item.innerHTML = `<span class="explorer-icon">${icon}</span><span class="explorer-name">${file}</span>`;
     item.title = file;
     item.appendChild(makeActions(fullPath, file, false));
@@ -161,21 +256,38 @@ async function browseDir(dirPath) {
     });
     list.appendChild(item);
   });
+
+  // 현재 열린 파일로 스크롤
+  const activeItem = list.querySelector('.explorer-item.active');
+  if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
 }
 
 // ── 파일 열기 ─────────────────────────────────────────────
-document.getElementById('btn-open-file').addEventListener('click', async () => {
+const openDropdown = document.getElementById('open-dropdown');
+
+document.getElementById('btn-open-file').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const rect = e.currentTarget.getBoundingClientRect();
+  openDropdown.style.top = rect.bottom + 4 + 'px';
+  openDropdown.style.left = rect.left + 'px';
+  openDropdown.classList.toggle('visible');
+});
+document.getElementById('open-dropdown-file').addEventListener('click', async () => {
+  openDropdown.classList.remove('visible');
   const filePath = await window.api.openFile();
   if (filePath) await loadPath(filePath);
 });
-
-document.getElementById('btn-open-folder').addEventListener('click', async () => {
+document.getElementById('open-dropdown-folder').addEventListener('click', async () => {
+  openDropdown.classList.remove('visible');
   const folderPath = await window.api.openFolder();
   if (folderPath) await loadPath(folderPath);
 });
+document.addEventListener('click', () => openDropdown.classList.remove('visible'));
+
 
 async function loadPath(filePath) {
   const type = await window.api.getFileType(filePath);
+  explorerState.currentFile = type !== 'folder' ? filePath : null;
   const folder = type === 'folder' ? filePath
     : filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
   browseDir(folder);
@@ -196,6 +308,7 @@ async function loadZip(filePath) {
   }
   state.pages = entries.map(e => ({ type: 'zip', zipPath: filePath, entry: e }));
   state.current = 0;
+  state.rotation = 0;
   state.fileName = filePath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
   buildSidebar();
@@ -207,6 +320,7 @@ async function loadFolder(folderPath) {
   if (!files.length) return;
   state.pages = files.map(f => ({ type: 'file', src: f }));
   state.current = 0;
+  state.rotation = 0;
   state.fileName = folderPath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
   buildSidebar();
@@ -225,6 +339,7 @@ async function loadImageFile(filePath) {
     state.pages = [{ type: 'file', src: filePath }];
     state.current = 0;
   }
+  state.rotation = 0;
   state.fileName = filePath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
   buildSidebar();
@@ -363,6 +478,7 @@ function updateUI() {
 
   document.getElementById('btn-prev').disabled = cur <= 1;
   document.getElementById('btn-next').disabled = cur >= total;
+  updateSaveBtn();
 }
 
 // ── 사이드바 썸네일 ───────────────────────────────────────
@@ -510,6 +626,7 @@ document.getElementById('btn-fit-page').addEventListener('click', () => setFit('
 document.getElementById('btn-zoom-in').addEventListener('click', zoomIn);
 document.getElementById('btn-zoom-out').addEventListener('click', zoomOut);
 document.getElementById('btn-rotate').addEventListener('click', rotate);
+document.getElementById('btn-save-rotation').addEventListener('click', saveRotation);
 
 document.getElementById('btn-single').addEventListener('click', () => {
   state.doubleView = false;
@@ -569,6 +686,56 @@ function zoomOut() {
 function rotate() {
   state.rotation = (state.rotation + 90) % 360;
   applyTransform();
+  updateSaveBtn();
+}
+
+function updateSaveBtn() {
+  const btn = document.getElementById('btn-save-rotation');
+  const page = state.pages[state.current];
+  const canSave = state.rotation !== 0 && !!page && page.type === 'file';
+  btn.disabled = !canSave;
+  btn.classList.toggle('active', canSave);
+}
+
+async function saveRotation() {
+  if (state.rotation === 0) return;
+  const pagesToSave = [];
+  const p1 = state.pages[state.current];
+  if (p1 && p1.type === 'file') pagesToSave.push(p1);
+  if (state.doubleView && state.current + 1 < state.pages.length) {
+    const p2 = state.pages[state.current + 1];
+    if (p2 && p2.type === 'file') pagesToSave.push(p2);
+  }
+  if (!pagesToSave.length) return;
+
+  const canvas = document.createElement('canvas');
+  const ctx = canvas.getContext('2d');
+  const angle = state.rotation * Math.PI / 180;
+  const swapped = state.rotation % 180 !== 0;
+
+  for (const page of pagesToSave) {
+    const src = await window.api.readImage(page.src);
+    if (!src) continue;
+    const img = new Image();
+    await new Promise(res => { img.onload = res; img.src = src; });
+    canvas.width  = swapped ? img.height : img.width;
+    canvas.height = swapped ? img.width  : img.height;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.save();
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(angle);
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    ctx.restore();
+    const ext = page.src.split('.').pop().toLowerCase();
+    const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : 'image/png';
+    const dataUrl = canvas.toDataURL(mime, 0.95);
+    const res = await window.api.saveImage(page.src, dataUrl);
+    if (!res.success) { alert('저장 실패: ' + res.error); return; }
+  }
+
+  state.rotation = 0;
+  await render();
+  updateSaveBtn();
 }
 
 async function toggleFullscreen() {
@@ -580,6 +747,9 @@ viewer.addEventListener('wheel', (e) => {
   if (e.ctrlKey) {
     e.preventDefault();
     if (e.deltaY < 0) zoomIn(); else zoomOut();
+  } else {
+    e.preventDefault();
+    if (e.deltaY < 0) goPrev(); else goNext();
   }
 }, { passive: false });
 
