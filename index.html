@@ -33,6 +33,9 @@
           <span id="explorer-path-label" title="">—</span>
           <button class="icon-btn" id="btn-bulk-rename" title="파일 일괄 이름 변경" style="display:none">✏</button>
         </div>
+        <div id="explorer-search-wrap">
+          <input id="explorer-search" type="text" placeholder="탐색기 검색..." spellcheck="false" />
+        </div>
         <div id="bulk-rename-bar" style="display:none">
           <div id="bulk-rename-hint"></div>
           <div id="bulk-rename-row">
@@ -81,20 +84,23 @@
         <span id="page-counter">—</span>
         <button class="tool-btn" id="btn-next" title="다음 페이지 (→)">&#8594;</button>
         <div class="toolbar-sep"></div>
+        <button class="tool-btn active" id="btn-fit-page" title="페이지 맞춤">⊡</button>
         <button class="tool-btn" id="btn-fit-width" title="너비 맞춤">↔</button>
         <button class="tool-btn" id="btn-fit-height" title="높이 맞춤">↕</button>
-        <button class="tool-btn active" id="btn-fit-page" title="페이지 맞춤">⊡</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn" id="btn-zoom-out" title="축소 (-)">－</button>
         <span id="zoom-level">100%</span>
         <button class="tool-btn" id="btn-zoom-in" title="확대 (+)">＋</button>
         <div class="toolbar-sep"></div>
-        <button class="tool-btn" id="btn-rotate" title="회전 (R)">↻</button>
-        <button class="tool-btn" id="btn-save-rotation" title="회전 저장 (현재 페이지)" disabled>💾</button>
-        <button class="tool-btn" id="btn-rtl" title="오른쪽→왼쪽 읽기 방향">↩ RTL</button>
-        <div class="toolbar-sep"></div>
         <button class="tool-btn" id="btn-single" title="한 장 보기">▣</button>
         <button class="tool-btn active" id="btn-double" title="두 장 보기">⧈</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-night" title="야간 모드">☾</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-rtl" title="오른쪽→왼쪽 읽기 방향">우→좌</button>
+        <div class="toolbar-sep"></div>
+        <button class="tool-btn" id="btn-rotate" title="회전 (R)">↻</button>
+        <button class="tool-btn" id="btn-save-rotation" title="회전 저장 (현재 페이지)" disabled>💾</button>
         <div class="toolbar-sep"></div>
         <button class="tool-btn" id="btn-fullscreen" title="전체화면 (F11)">⛶</button>
         <button class="tool-btn" id="btn-about" title="프로그램 정보">ⓘ</button>

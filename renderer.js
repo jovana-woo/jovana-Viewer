@@ -5,13 +5,16 @@ const state = {
   doubleView: true,
   fitMode: 'page',
   zoom: 1.0,
+  zoomLeft: 1.0,
+  zoomRight: 1.0,
   rotation: 0,
   rtl: false,
   fileName: '',
   progressKey: '',
   sourcePath: '',
   sourceType: '',
-  autoSwitchingBook: false
+  autoSwitchingBook: false,
+  zoomTarget: 'left'
 };
 
 const zipBrowseState = { zipPath: null, prefix: null, history: [] };
@@ -30,6 +33,22 @@ function saveReadingDirection(isRtl) {
 
 function loadReadingDirection() {
   try { return localStorage.getItem('reading-direction-rtl') === '1'; } catch { return false; }
+}
+
+function saveZipLastPrefix(zipPath, prefix) {
+  try { localStorage.setItem('zp:lastprefix:' + zipPath, prefix || ''); } catch {}
+}
+
+function loadZipLastPrefix(zipPath) {
+  try { return localStorage.getItem('zp:lastprefix:' + zipPath) || ''; } catch { return ''; }
+}
+
+function saveNightMode(enabled) {
+  try { localStorage.setItem('night-mode', enabled ? '1' : '0'); } catch {}
+}
+
+function loadNightMode() {
+  try { return localStorage.getItem('night-mode') === '1'; } catch { return false; }
 }
 
 // ── 최근 파일 ─────────────────────────────────────────────
@@ -92,6 +111,7 @@ const pageInfo      = document.getElementById('page-info');
 const tabTitle      = document.getElementById('tab-title');
 const aboutModal    = document.getElementById('about-modal');
 const btnRtl        = document.getElementById('btn-rtl');
+const btnNight      = document.getElementById('btn-night');
 
 function syncReadingDirectionUI() {
   btnRtl.classList.toggle('active', state.rtl);
@@ -99,9 +119,18 @@ function syncReadingDirectionUI() {
   btnRtl.title = state.rtl ? '읽기 방향: 우→좌 (일본)' : '읽기 방향: 좌→우 (한국)';
 }
 
+function applyNightMode(enabled) {
+  document.body.classList.toggle('night-mode', !!enabled);
+  if (!btnNight) return;
+  btnNight.classList.toggle('active', !!enabled);
+  btnNight.textContent = enabled ? '☾ 야간' : '☾';
+  btnNight.title = enabled ? '야간 모드 켜짐 (클릭하여 끄기)' : '야간 모드';
+}
+
 // ── 탐색기 ────────────────────────────────────────────────
 const explorerState = { path: null, parent: null, currentFile: null, files: [],
-  zipMode: false, zipPath: null, zipPrefix: null };
+  dirs: [], zipMode: false, zipPath: null, zipPrefix: null, activeFolder: null };
+let explorerQuery = '';
 
 function toggleSection(id) {
   document.getElementById(id).classList.toggle('collapsed');
@@ -222,7 +251,9 @@ async function browseDir(dirPath) {
   const result = await window.api.readDirEntries(dirPath);
   explorerState.path = dirPath;
   explorerState.parent = result.parent;
+  explorerState.dirs = result.dirs;
   explorerState.files = result.files;
+  explorerState.activeFolder = null;
   explorerState.zipMode = false;
   document.getElementById('btn-bulk-rename').style.display = result.files.length ? '' : 'none';
 
@@ -235,7 +266,11 @@ async function browseDir(dirPath) {
   const list = document.getElementById('explorer-list');
   list.innerHTML = '';
 
-  if (!result.dirs.length && !result.files.length) {
+  const q = explorerQuery.toLowerCase();
+  const viewDirs = q ? result.dirs.filter(d => d.toLowerCase().includes(q)) : result.dirs;
+  const viewFiles = q ? result.files.filter(f => f.toLowerCase().includes(q)) : result.files;
+
+  if (!viewDirs.length && !viewFiles.length) {
     list.innerHTML = '<div class="empty-hint">지원 파일 없음</div>';
     return;
   }
@@ -303,7 +338,7 @@ async function browseDir(dirPath) {
     return wrap;
   }
 
-  result.dirs.forEach(dir => {
+  viewDirs.forEach(dir => {
     const item = document.createElement('div');
     item.className = 'explorer-item explorer-dir';
     const sep = makeSep(dirPath);
@@ -327,7 +362,7 @@ async function browseDir(dirPath) {
     list.appendChild(item);
   });
 
-  result.files.forEach(file => {
+  viewFiles.forEach(file => {
     const ext = file.split('.').pop().toLowerCase();
     const icon = ['zip','cbz','cbr','rar'].includes(ext) ? '🗜' : '🖼';
     const item = document.createElement('div');
@@ -411,6 +446,16 @@ async function loadZip(filePath) {
   state.sourceType = 'zip';
   saveRecent(filePath, zipName, 'zip');
   tabTitle.textContent = zipName;
+
+  // zip 내부 폴더(권) 마지막 위치를 복원 시도
+  const lastPrefix = loadZipLastPrefix(filePath);
+  if (lastPrefix) {
+    const lastDir = await window.api.readZipDir(filePath, lastPrefix);
+    if ((lastDir.images && lastDir.images.length > 0) || (lastDir.folders && lastDir.folders.length > 0)) {
+      await enterZipDir(filePath, lastPrefix);
+      return;
+    }
+  }
   await enterZipDir(filePath, '');
 }
 
@@ -507,6 +552,7 @@ async function loadZipImages(zipPath, entries, displayName) {
   state.rotation = 0;
   const progressKey = zipPath + (zipBrowseState.prefix ? '::' + zipBrowseState.prefix : '');
   state.progressKey = progressKey;
+  saveZipLastPrefix(zipPath, zipBrowseState.prefix || '');
   state.current = Math.min(loadProgress(progressKey), entries.length - 1);
   state.fileName = displayName || zipPath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
@@ -569,7 +615,9 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   explorerState.zipMode = true;
   explorerState.zipPath = zipPath;
   explorerState.zipPrefix = prefix;
+  explorerState.dirs = folders;
   explorerState.files = [];
+  explorerState.activeFolder = activeFolder || null;
   document.getElementById('btn-bulk-rename').style.display = 'none';
 
   const zipName = zipPath.split(/[\\/]/).pop();
@@ -581,7 +629,15 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   const list = document.getElementById('explorer-list');
   list.innerHTML = '';
 
-  folders.forEach(folder => {
+  const q = explorerQuery.toLowerCase();
+  const viewFolders = q ? folders.filter(f => f.toLowerCase().includes(q)) : folders;
+
+  if (!viewFolders.length) {
+    list.innerHTML = '<div class="empty-hint">검색 결과 없음</div>';
+    return;
+  }
+
+  viewFolders.forEach(folder => {
     const item = document.createElement('div');
     item.className = 'explorer-item explorer-dir';
     if (folder === activeFolder) item.classList.add('active');
@@ -606,6 +662,21 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   const activeItem = list.querySelector('.explorer-item.active');
   if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
 }
+
+const explorerSearch = document.getElementById('explorer-search');
+explorerSearch.addEventListener('input', () => {
+  explorerQuery = explorerSearch.value.trim();
+  if (explorerState.zipMode) {
+    browseZipDir(
+      explorerState.zipPath,
+      explorerState.zipPrefix || '',
+      explorerState.dirs || [],
+      explorerState.activeFolder || null
+    );
+  } else if (explorerState.path) {
+    browseDir(explorerState.path);
+  }
+});
 
 // ── 이미지 로드 ───────────────────────────────────────────
 async function loadPageImage(page) {
@@ -681,6 +752,17 @@ function applyTransform() {
   pagesContainer.style.paddingTop = '';
   pagesContainer.style.paddingBottom = '';
 
+  const getFitSize = (imgEl, maxW, maxH) => {
+    const naturalW = imgEl?.naturalWidth || 0;
+    const naturalH = imgEl?.naturalHeight || 0;
+    if (!naturalW || !naturalH) return { w: maxW, h: maxH };
+    const scale = Math.min(maxW / naturalW, maxH / naturalH, 1);
+    return {
+      w: Math.max(1, Math.floor(naturalW * scale)),
+      h: Math.max(1, Math.floor(naturalH * scale))
+    };
+  };
+
   const fitImageToBounds = (imgEl, maxW, maxH) => {
     if (!imgEl || imgEl.style.display === 'none') return;
     const naturalW = imgEl.naturalWidth || 0;
@@ -742,18 +824,36 @@ function applyTransform() {
     }
   } else {
     // 수동 줌
+    const hasRight = pageRight.style.display !== 'none';
+    const isDouble = state.doubleView && hasRight;
+    const vw = viewer.clientWidth - 40;
+    const vh = viewer.clientHeight - 40;
+    const count = isDouble ? 2 : 1;
+    const maxW = Math.floor((vw - (count > 1 ? 4 : 0)) / count);
 
-    pageLeft.style.width = '';
-    pageLeft.style.height = '';
-    pageLeft.style.maxWidth = 'none';
-    pageLeft.style.maxHeight = 'none';
-    pageLeft.style.transform = `scale(${state.zoom}) ${rot}`;
-    if (pageRight.style.display !== 'none') {
-      pageRight.style.width = '';
-      pageRight.style.height = '';
-      pageRight.style.maxWidth = 'none';
-      pageRight.style.maxHeight = 'none';
-      pageRight.style.transform = `scale(${state.zoom}) ${rot}`;
+    // 두 장 보기에서는 기본 fit 크기를 유지하고 좌/우를 독립 확대
+    const leftBase = getFitSize(pageLeft, maxW, vh);
+    pageLeft.style.width = leftBase.w + 'px';
+    pageLeft.style.height = leftBase.h + 'px';
+    pageLeft.style.maxWidth = '';
+    pageLeft.style.maxHeight = '';
+    pageLeft.style.transform = rot;
+
+    if (!isDouble) {
+      pageLeft.style.width = Math.max(1, Math.floor(leftBase.w * state.zoom)) + 'px';
+      pageLeft.style.height = Math.max(1, Math.floor(leftBase.h * state.zoom)) + 'px';
+    } else {
+      const rightBase = getFitSize(pageRight, maxW, vh);
+      pageRight.style.width = rightBase.w + 'px';
+      pageRight.style.height = rightBase.h + 'px';
+      pageRight.style.maxWidth = '';
+      pageRight.style.maxHeight = '';
+      pageRight.style.transform = rot;
+
+      pageLeft.style.width = Math.max(1, Math.floor(leftBase.w * state.zoomLeft)) + 'px';
+      pageLeft.style.height = Math.max(1, Math.floor(leftBase.h * state.zoomLeft)) + 'px';
+      pageRight.style.width = Math.max(1, Math.floor(rightBase.w * state.zoomRight)) + 'px';
+      pageRight.style.height = Math.max(1, Math.floor(rightBase.h * state.zoomRight)) + 'px';
     }
   }
 }
@@ -785,6 +885,9 @@ function resetTransientZoom() {
   if (state.fitMode !== 'manual') return;
   state.fitMode = 'page';
   state.zoom = 1;
+  state.zoomLeft = 1;
+  state.zoomRight = 1;
+  state.zoomTarget = 'left';
   ['width','height','page'].forEach(m => {
     document.getElementById('btn-fit-' + m).classList.toggle('active', m === 'page');
   });
@@ -1046,6 +1149,7 @@ document.addEventListener('keydown', (e) => {
 }, { capture: true });
 
 document.addEventListener('keydown', (e) => {
+  if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
     e.preventDefault(); goNext();
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Backspace') {
@@ -1058,6 +1162,9 @@ document.addEventListener('keydown', (e) => {
     state.current = Math.max(state.pages.length - (state.doubleView ? 2 : 1), 0);
     render();
   } else if (e.key === 'F11') {
+    toggleFullscreen();
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
     toggleFullscreen();
   } else if (e.key === 'Escape') {
     if (aboutModal && aboutModal.style.display !== 'none') {
@@ -1079,7 +1186,6 @@ viewer.addEventListener('click', (e) => {
   if (panMoved) return;
   if (e.detail !== 1) return; // 더블클릭 중복 확대 방지
   if (!state.pages.length) return;
-  if (state.fitMode === 'manual' && state.zoom > 1) return;
 
   const rect = viewer.getBoundingClientRect();
   const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
@@ -1087,8 +1193,34 @@ viewer.addEventListener('click', (e) => {
   const ratioX = rect.width ? (clickX / rect.width) : 0.5;
   const ratioY = rect.height ? (clickY / rect.height) : 0.5;
 
+  const leftRect = pageLeft.getBoundingClientRect();
+  const rightRect = pageRight.getBoundingClientRect();
+  const inLeft = pageLeft.style.display !== 'none' &&
+    e.clientX >= leftRect.left && e.clientX <= leftRect.right &&
+    e.clientY >= leftRect.top && e.clientY <= leftRect.bottom;
+  const inRight = pageRight.style.display !== 'none' &&
+    e.clientX >= rightRect.left && e.clientX <= rightRect.right &&
+    e.clientY >= rightRect.top && e.clientY <= rightRect.bottom;
+  if (inRight) state.zoomTarget = 'right';
+  else if (inLeft) state.zoomTarget = 'left';
+  else state.zoomTarget = clickX < rect.width / 2 ? 'left' : 'right';
+
   state.fitMode = 'manual';
-  state.zoom = 1.35;
+  const isDouble = state.doubleView && pageRight.style.display !== 'none';
+  if (!isDouble) {
+    if (state.zoom > 1) return; // 한 장 보기: 클릭 확대 1회만
+    state.zoom = Math.min(Math.max(state.zoom, 1) * 1.35, 5);
+    state.zoomLeft = state.zoom;
+    state.zoomRight = 1;
+  } else if (state.zoomTarget === 'right') {
+    if (state.zoomRight > 1) return; // 오른쪽 페이지 클릭 확대 1회만
+    state.zoomRight = Math.min(Math.max(state.zoomRight, 1) * 1.35, 5);
+    state.zoom = Math.max(state.zoomLeft, state.zoomRight);
+  } else {
+    if (state.zoomLeft > 1) return; // 왼쪽 페이지 클릭 확대 1회만
+    state.zoomLeft = Math.min(Math.max(state.zoomLeft, 1) * 1.35, 5);
+    state.zoom = Math.max(state.zoomLeft, state.zoomRight);
+  }
   ['width','height','page'].forEach(m => document.getElementById('btn-fit-' + m).classList.remove('active'));
   applyTransform();
   updateUI();
@@ -1139,6 +1271,11 @@ btnRtl.addEventListener('click', () => {
   syncReadingDirectionUI();
   render();
 });
+btnNight.addEventListener('click', () => {
+  const enabled = !document.body.classList.contains('night-mode');
+  saveNightMode(enabled);
+  applyNightMode(enabled);
+});
 
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
 document.getElementById('btn-about').addEventListener('click', () => {
@@ -1171,7 +1308,16 @@ function setFit(mode) {
 
 function zoomIn() {
   state.fitMode = 'manual';
-  state.zoom = Math.min(state.zoom * 1.2, 5);
+  const isDouble = state.doubleView && pageRight.style.display !== 'none';
+  if (isDouble) {
+    state.zoomLeft = Math.min(Math.max(state.zoomLeft, 1) * 1.2, 5);
+    state.zoomRight = Math.min(Math.max(state.zoomRight, 1) * 1.2, 5);
+    state.zoom = Math.max(state.zoomLeft, state.zoomRight);
+  } else {
+    state.zoom = Math.min(Math.max(state.zoom, 1) * 1.2, 5);
+    state.zoomLeft = state.zoom;
+    state.zoomRight = 1;
+  }
   ['width','height','page'].forEach(m => document.getElementById('btn-fit-' + m).classList.remove('active'));
   applyTransform();
   updateUI();
@@ -1179,7 +1325,16 @@ function zoomIn() {
 
 function zoomOut() {
   state.fitMode = 'manual';
-  state.zoom = Math.max(state.zoom / 1.2, 0.1);
+  const isDouble = state.doubleView && pageRight.style.display !== 'none';
+  if (isDouble) {
+    state.zoomLeft = Math.max(state.zoomLeft / 1.2, 1);
+    state.zoomRight = Math.max(state.zoomRight / 1.2, 1);
+    state.zoom = Math.max(state.zoomLeft, state.zoomRight);
+  } else {
+    state.zoom = Math.max(state.zoom / 1.2, 1);
+    state.zoomLeft = state.zoom;
+    state.zoomRight = 1;
+  }
   ['width','height','page'].forEach(m => document.getElementById('btn-fit-' + m).classList.remove('active'));
   applyTransform();
   updateUI();
@@ -1264,7 +1419,9 @@ const PAN_THRESHOLD = 5;
 
 viewer.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
-  if (!(state.fitMode === 'manual' && state.zoom > 1)) return;
+  const anyZoomed = state.fitMode === 'manual' &&
+    (state.zoom > 1 || state.zoomLeft > 1 || state.zoomRight > 1);
+  if (!anyZoomed) return;
   panning = true;
   panMoved = false;
   panStartX = e.clientX;
@@ -1379,4 +1536,5 @@ window.addEventListener('resize', () => {
 // ── 초기화 ────────────────────────────────────────────────
 state.rtl = loadReadingDirection();
 syncReadingDirectionUI();
+applyNightMode(loadNightMode());
 buildRecentList();
