@@ -51,6 +51,14 @@ function loadNightMode() {
   try { return localStorage.getItem('night-mode') === '1'; } catch { return false; }
 }
 
+function saveAutoSwitch(enabled) {
+  try { localStorage.setItem('auto-switch-book', enabled ? '1' : '0'); } catch {}
+}
+
+function loadAutoSwitch() {
+  try { return localStorage.getItem('auto-switch-book') === '1'; } catch { return false; }
+}
+
 // ── 최근 파일 ─────────────────────────────────────────────
 function saveRecent(path, name, type) {
   try {
@@ -365,6 +373,9 @@ async function browseDir(dirPath) {
     item.className = 'explorer-item explorer-dir';
     const sep = makeSep(dirPath);
     const fullPath = dirPath.replace(/[/\\]+$/, '') + sep + dir;
+    if (explorerState.currentFile && fullPath.toLowerCase() === explorerState.currentFile.toLowerCase()) {
+      item.classList.add('active');
+    }
     const iconEl = document.createElement('span');
     iconEl.className = 'explorer-icon';
     iconEl.textContent = '📁';
@@ -415,7 +426,7 @@ async function browseDir(dirPath) {
 
   // 현재 열린 파일로 스크롤
   const activeItem = list.querySelector('.explorer-item.active');
-  if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
+  if (activeItem) activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
 // ── 파일 열기 ─────────────────────────────────────────────
@@ -446,10 +457,11 @@ async function loadPath(filePath, options = {}) {
   // 쓰기 계열 IPC(delete/rename/save)의 허용 루트를 현재 열람 경로로 등록
   await window.api.setActiveRoot(filePath);
   const type = await window.api.getFileType(filePath);
-  explorerState.currentFile = type !== 'folder' ? filePath : null;
-  const folder = type === 'folder' ? filePath
-    : filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
-  await browseDir(folder);
+  explorerState.currentFile = filePath;
+  const parent = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
+  // 폴더 모드: 탐색기에 부모 폴더(권 목록)를 표시 — zip 모드와 동일한 방식
+  const explorerDir = (type === 'folder' && parent) ? parent : parent || filePath;
+  await browseDir(explorerDir);
   if (type === 'zip') {
     await loadZip(filePath, { resetProgress });
   } else if (type === 'folder') {
@@ -695,7 +707,7 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   });
 
   const activeItem = list.querySelector('.explorer-item.active');
-  if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
+  if (activeItem) activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
 const explorerSearch = document.getElementById('explorer-search');
@@ -913,8 +925,8 @@ function updateUI() {
     : Math.round(state.zoom * 100) + '%';
   pageInfo.textContent = total ? `${cur} / ${total}` : '—';
 
-  document.getElementById('btn-prev').disabled = cur <= 1;
-  document.getElementById('btn-next').disabled = cur >= total;
+  document.getElementById('btn-prev').disabled = state.autoSwitchingBook || !total;
+  document.getElementById('btn-next').disabled = state.autoSwitchingBook || !total;
   updateSaveBtn();
 }
 
@@ -1054,6 +1066,8 @@ function goNext() {
     resetTransientZoom();
     state.current = Math.min(state.current + step, state.pages.length - 1);
     render();
+  } else if (state.pages.length > 0 && state.sourcePath && loadAutoSwitch()) {
+    autoOpenNextBook();
   }
 }
 function goPrev() {
@@ -1063,6 +1077,8 @@ function goPrev() {
     resetTransientZoom();
     state.current = Math.max(state.current - step, 0);
     render();
+  } else if (state.pages.length > 0 && state.sourcePath && loadAutoSwitch()) {
+    autoOpenPrevBook();
   }
 }
 
@@ -1072,8 +1088,25 @@ document.getElementById('btn-prev').addEventListener('click', goPrev);
 async function autoOpenNextBook() {
   if (state.autoSwitchingBook) return;
   state.autoSwitchingBook = true;
+  updateUI();
   try {
     if (!state.sourcePath) return;
+
+    // zip 내부 폴더(권) 간 이동 — 같은 zip 안에서 다음 폴더로
+    if (state.sourceType === 'zip' && zipBrowseState.prefix) {
+      const currentZipPath = state.sourcePath;
+      const currentPrefix = zipBrowseState.prefix;
+      const slashIdx = currentPrefix.lastIndexOf('/');
+      const parentPrefix = slashIdx >= 0 ? currentPrefix.slice(0, slashIdx) : '';
+      const currentFolder = slashIdx >= 0 ? currentPrefix.slice(slashIdx + 1) : currentPrefix;
+      const dir = await window.api.readZipDir(currentZipPath, parentPrefix);
+      const idx = dir.folders.findIndex(f => f.toLowerCase() === currentFolder.toLowerCase());
+      if (idx < 0 || idx + 1 >= dir.folders.length) return;
+      const nextPrefix = parentPrefix ? parentPrefix + '/' + dir.folders[idx + 1] : dir.folders[idx + 1];
+      await enterZipDir(currentZipPath, nextPrefix, { resetProgress: true });
+      return;
+    }
+
     const src = state.sourcePath;
     const slash = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
     if (slash <= 0) return;
@@ -1102,14 +1135,38 @@ async function autoOpenNextBook() {
     console.error('autoOpenNextBook failed:', e);
   } finally {
     state.autoSwitchingBook = false;
+    updateUI();
   }
 }
 
 async function autoOpenPrevBook() {
   if (state.autoSwitchingBook) return;
   state.autoSwitchingBook = true;
+  updateUI();
   try {
     if (!state.sourcePath) return;
+
+    // zip 내부 폴더(권) 간 이동 — 같은 zip 안에서 이전 폴더로
+    if (state.sourceType === 'zip' && zipBrowseState.prefix) {
+      const currentZipPath = state.sourcePath;
+      const currentPrefix = zipBrowseState.prefix;
+      const slashIdx = currentPrefix.lastIndexOf('/');
+      const parentPrefix = slashIdx >= 0 ? currentPrefix.slice(0, slashIdx) : '';
+      const currentFolder = slashIdx >= 0 ? currentPrefix.slice(slashIdx + 1) : currentPrefix;
+      const dir = await window.api.readZipDir(currentZipPath, parentPrefix);
+      const idx = dir.folders.findIndex(f => f.toLowerCase() === currentFolder.toLowerCase());
+      if (idx <= 0) return;
+      const prevPrefix = parentPrefix ? parentPrefix + '/' + dir.folders[idx - 1] : dir.folders[idx - 1];
+      await enterZipDir(currentZipPath, prevPrefix, { resetProgress: true });
+      if (state.pages.length > 0) {
+        const s = state.doubleView ? 2 : 1;
+        state.current = Math.max(0, state.pages.length - s);
+        if (state.doubleView && state.current % 2 !== 0 && state.current > 0) state.current -= 1;
+        await render();
+      }
+      return;
+    }
+
     const src = state.sourcePath;
     const slash = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
     if (slash <= 0) return;
@@ -1134,10 +1191,19 @@ async function autoOpenPrevBook() {
     const sep = parentPath.includes('/') ? '/' : '\\';
     const prevPath = parentPath.replace(/[/\\]+$/, '') + sep + prevName;
     await loadPath(prevPath, { resetProgress: true });
+
+    // 이전 권은 마지막 페이지로 이동
+    if (state.pages.length > 0) {
+      const s = state.doubleView ? 2 : 1;
+      state.current = Math.max(0, state.pages.length - s);
+      if (state.doubleView && state.current % 2 !== 0 && state.current > 0) state.current -= 1;
+      await render();
+    }
   } catch (e) {
     console.error('autoOpenPrevBook failed:', e);
   } finally {
     state.autoSwitchingBook = false;
+    updateUI();
   }
 }
 
@@ -1326,6 +1392,11 @@ document.getElementById('btn-about').addEventListener('click', () => {
 document.getElementById('settings-close').addEventListener('click', () => {
   if (settingsModal) settingsModal.style.display = 'none';
 });
+const chkAutoSwitch = document.getElementById('chk-auto-switch');
+if (chkAutoSwitch) {
+  chkAutoSwitch.checked = loadAutoSwitch();
+  chkAutoSwitch.addEventListener('change', () => saveAutoSwitch(chkAutoSwitch.checked));
+}
 document.getElementById('about-close').addEventListener('click', () => {
   if (aboutModal) aboutModal.style.display = 'none';
 });

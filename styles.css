@@ -398,13 +398,26 @@ body {
 
 /* 사이드바 수직 구분 리사이저 */
 #sidebar-v-resizer {
-  height: 4px;
+  height: 10px;
   background: transparent;
   cursor: row-resize;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#sidebar-v-resizer::after {
+  content: '';
+  display: block;
+  width: 100%;
+  height: 4px;
+  background: var(--overlay0);
   transition: background 0.15s;
 }
-#sidebar-v-resizer:hover, #sidebar-v-resizer.dragging, #sidebar-v-resizer.corner-hover { background: var(--mauve); }
+#sidebar-v-resizer:hover::after,
+#sidebar-v-resizer.dragging::after {
+  background: var(--mauve);
+}
 
 /* ── 리사이저 ─────────────────────────── */
 #resizer {
@@ -713,6 +726,32 @@ body.fullscreen #viewer { background: #000; }
 }
 .quick-guide p:last-child {
   margin-bottom: 0;
+}
+.settings-toggle-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+.settings-toggle-row input[type="checkbox"] {
+  margin-top: 2px;
+  accent-color: var(--mauve);
+  width: 15px;
+  height: 15px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.settings-toggle-label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  color: var(--text);
+  font-size: 13px;
+}
+.settings-toggle-desc {
+  color: var(--subtext1);
+  font-size: 11px;
 }
 .about-logo {
   flex: 0 0 96px;
