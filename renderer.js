@@ -110,8 +110,29 @@ const statusZoom    = document.getElementById('status-zoom');
 const pageInfo      = document.getElementById('page-info');
 const tabTitle      = document.getElementById('tab-title');
 const aboutModal    = document.getElementById('about-modal');
+const settingsModal = document.getElementById('settings-modal');
 const btnRtl        = document.getElementById('btn-rtl');
 const btnNight      = document.getElementById('btn-night');
+let cursorHideTimer = null;
+let cursorHiddenByIdle = false;
+
+function showViewerCursor() {
+  cursorHiddenByIdle = false;
+  viewer.style.cursor = state.pages.length ? 'grab' : '';
+}
+
+function hideViewerCursor() {
+  if (!document.body.classList.contains('fullscreen')) return;
+  if (panning) return;
+  cursorHiddenByIdle = true;
+  viewer.style.cursor = 'none';
+}
+
+function scheduleCursorHide() {
+  if (cursorHideTimer) clearTimeout(cursorHideTimer);
+  if (!document.body.classList.contains('fullscreen')) return;
+  cursorHideTimer = setTimeout(hideViewerCursor, 3000);
+}
 
 function syncReadingDirectionUI() {
   btnRtl.classList.toggle('active', state.rtl);
@@ -123,8 +144,9 @@ function applyNightMode(enabled) {
   document.body.classList.toggle('night-mode', !!enabled);
   if (!btnNight) return;
   btnNight.classList.toggle('active', !!enabled);
-  btnNight.textContent = enabled ? '☾ 야간' : '☾';
-  btnNight.title = enabled ? '야간 모드 켜짐 (클릭하여 끄기)' : '야간 모드';
+  // 현재 모드의 "반대" 아이콘을 보여줘서 다음 동작을 직관적으로 안내
+  btnNight.textContent = enabled ? '☀' : '☾';
+  btnNight.title = enabled ? '일반 모드로 전환' : '야간 모드로 전환';
 }
 
 // ── 탐색기 ────────────────────────────────────────────────
@@ -355,7 +377,7 @@ async function browseDir(dirPath) {
     item.appendChild(makeActions(fullPath, dir, true));
     item.addEventListener('click', () => {
       browseDir(fullPath);
-      loadPath(fullPath);
+      loadPath(fullPath, { resetProgress: true });
       const sec = document.getElementById('section-pages');
       if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
     });
@@ -384,7 +406,7 @@ async function browseDir(dirPath) {
     item.title = file;
     item.appendChild(makeActions(fullPath, file, false));
     item.addEventListener('click', () => {
-      loadPath(fullPath);
+      loadPath(fullPath, { resetProgress: true });
       const sec = document.getElementById('section-pages');
       if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
     });
@@ -419,7 +441,8 @@ document.getElementById('open-dropdown-folder').addEventListener('click', async 
 document.addEventListener('click', () => openDropdown.classList.remove('visible'));
 
 
-async function loadPath(filePath) {
+async function loadPath(filePath, options = {}) {
+  const { resetProgress = false } = options;
   // 쓰기 계열 IPC(delete/rename/save)의 허용 루트를 현재 열람 경로로 등록
   await window.api.setActiveRoot(filePath);
   const type = await window.api.getFileType(filePath);
@@ -428,15 +451,16 @@ async function loadPath(filePath) {
     : filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
   await browseDir(folder);
   if (type === 'zip') {
-    await loadZip(filePath);
+    await loadZip(filePath, { resetProgress });
   } else if (type === 'folder') {
-    await loadFolder(filePath);
+    await loadFolder(filePath, { resetProgress });
   } else if (type === 'image') {
-    await loadImageFile(filePath);
+    await loadImageFile(filePath, { resetProgress });
   }
 }
 
-async function loadZip(filePath) {
+async function loadZip(filePath, options = {}) {
+  const { resetProgress = false } = options;
   const zipName = filePath.split(/[\\/]/).pop();
   zipBrowseState.zipPath = filePath;
   zipBrowseState.prefix = '';
@@ -447,19 +471,23 @@ async function loadZip(filePath) {
   saveRecent(filePath, zipName, 'zip');
   tabTitle.textContent = zipName;
 
-  // zip 내부 폴더(권) 마지막 위치를 복원 시도
-  const lastPrefix = loadZipLastPrefix(filePath);
-  if (lastPrefix) {
-    const lastDir = await window.api.readZipDir(filePath, lastPrefix);
-    if ((lastDir.images && lastDir.images.length > 0) || (lastDir.folders && lastDir.folders.length > 0)) {
-      await enterZipDir(filePath, lastPrefix);
-      return;
+  // 권수 자동 이동 시에는 항상 처음부터 시작
+  if (!resetProgress) {
+    // zip 내부 폴더(권) 마지막 위치를 복원 시도
+    const lastPrefix = loadZipLastPrefix(filePath);
+    if (lastPrefix) {
+      const lastDir = await window.api.readZipDir(filePath, lastPrefix);
+      if ((lastDir.images && lastDir.images.length > 0) || (lastDir.folders && lastDir.folders.length > 0)) {
+        await enterZipDir(filePath, lastPrefix, { resetProgress });
+        return;
+      }
     }
   }
-  await enterZipDir(filePath, '');
+  await enterZipDir(filePath, '', { resetProgress });
 }
 
-async function enterZipDir(zipPath, prefix) {
+async function enterZipDir(zipPath, prefix, options = {}) {
+  const { resetProgress = false } = options;
   zipBrowseState.prefix = prefix;
   const dir = await window.api.readZipDir(zipPath, prefix);
 
@@ -471,7 +499,7 @@ async function enterZipDir(zipPath, prefix) {
     const zipName = zipPath.split(/[\\/]/).pop();
     const folderLabel = prefix ? prefix.split('/').pop() : '';
     const displayName = folderLabel ? zipName + ' / ' + folderLabel : zipName;
-    await loadZipImages(zipPath, dir.images, displayName);
+    await loadZipImages(zipPath, dir.images, displayName, { resetProgress });
   } else if (dir.folders.length > 0) {
     showZipFolderPicker(zipPath, prefix, dir.folders);
   } else if (!prefix) {
@@ -481,7 +509,7 @@ async function enterZipDir(zipPath, prefix) {
       alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
       return;
     }
-    await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop());
+    await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop(), { resetProgress });
   } else {
     alert('이 폴더에 이미지가 없습니다.');
   }
@@ -538,7 +566,7 @@ function showZipFolderPicker(zipPath, prefix, folders) {
     card.addEventListener('click', () => {
       const newPrefix = prefix ? prefix + '/' + folder : folder;
       zipBrowseState.history.push(prefix);
-      enterZipDir(zipPath, newPrefix);
+      enterZipDir(zipPath, newPrefix, { resetProgress: true });
     });
     grid.appendChild(card);
   });
@@ -547,13 +575,14 @@ function showZipFolderPicker(zipPath, prefix, folders) {
   updateUI();
 }
 
-async function loadZipImages(zipPath, entries, displayName) {
+async function loadZipImages(zipPath, entries, displayName, options = {}) {
+  const { resetProgress = false } = options;
   state.pages = entries.map(e => ({ type: 'zip', zipPath, entry: e }));
   state.rotation = 0;
   const progressKey = zipPath + (zipBrowseState.prefix ? '::' + zipBrowseState.prefix : '');
   state.progressKey = progressKey;
   saveZipLastPrefix(zipPath, zipBrowseState.prefix || '');
-  state.current = Math.min(loadProgress(progressKey), entries.length - 1);
+  state.current = resetProgress ? 0 : Math.min(loadProgress(progressKey), entries.length - 1);
   state.fileName = displayName || zipPath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
 
@@ -573,13 +602,14 @@ async function loadZipImages(zipPath, entries, displayName) {
   await render();
 }
 
-async function loadFolder(folderPath) {
+async function loadFolder(folderPath, options = {}) {
+  const { resetProgress = false } = options;
   const files = await window.api.readFolder(folderPath);
   if (!files.length) return;
   state.pages = files.map(f => ({ type: 'file', src: f }));
   state.rotation = 0;
   state.progressKey = folderPath;
-  state.current = Math.min(loadProgress(folderPath), files.length - 1);
+  state.current = resetProgress ? 0 : Math.min(loadProgress(folderPath), files.length - 1);
   state.fileName = folderPath.split(/[\\/]/).pop();
   state.sourcePath = folderPath;
   state.sourceType = 'folder';
@@ -589,13 +619,18 @@ async function loadFolder(folderPath) {
   await render();
 }
 
-async function loadImageFile(filePath) {
+async function loadImageFile(filePath, options = {}) {
+  const { resetProgress = false } = options;
   const folder = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
   const files = await window.api.readFolder(folder);
   if (files.length) {
     state.pages = files.map(f => ({ type: 'file', src: f }));
-    state.current = files.indexOf(filePath);
-    if (state.current < 0) state.current = 0;
+    if (resetProgress) {
+      state.current = 0;
+    } else {
+      state.current = files.indexOf(filePath);
+      if (state.current < 0) state.current = 0;
+    }
   } else {
     state.pages = [{ type: 'file', src: filePath }];
     state.current = 0;
@@ -652,7 +687,7 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
     item.appendChild(nameEl);
     item.addEventListener('click', () => {
       const newPrefix = prefix ? prefix + '/' + folder : folder;
-      enterZipDir(zipPath, newPrefix);
+      enterZipDir(zipPath, newPrefix, { resetProgress: true });
       const sec = document.getElementById('section-pages');
       if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
     });
@@ -694,11 +729,13 @@ async function render() {
   if (!state.pages.length) {
     dropZone.style.display = 'flex';
     pagesContainer.style.display = 'none';
-    viewer.style.cursor = '';
+    viewer.style.cursor = (document.body.classList.contains('fullscreen') && cursorHiddenByIdle) ? 'none' : '';
     updateUI();
     return;
   }
-  viewer.style.cursor = 'grab';
+  if (!(document.body.classList.contains('fullscreen') && cursorHiddenByIdle)) {
+    viewer.style.cursor = 'grab';
+  }
 
   dropZone.style.display = 'none';
   pagesContainer.style.display = 'flex';
@@ -1060,7 +1097,7 @@ async function autoOpenNextBook() {
     const nextName = list[idx + 1];
     const sep = parentPath.includes('/') ? '/' : '\\';
     const nextPath = parentPath.replace(/[/\\]+$/, '') + sep + nextName;
-    await loadPath(nextPath);
+    await loadPath(nextPath, { resetProgress: true });
   } catch (e) {
     console.error('autoOpenNextBook failed:', e);
   } finally {
@@ -1096,13 +1133,7 @@ async function autoOpenPrevBook() {
     const prevName = list[idx - 1];
     const sep = parentPath.includes('/') ? '/' : '\\';
     const prevPath = parentPath.replace(/[/\\]+$/, '') + sep + prevName;
-    await loadPath(prevPath);
-
-    if (!state.pages.length) return;
-    resetTransientZoom();
-    const lastStart = Math.max(state.pages.length - (state.doubleView ? 2 : 1), 0);
-    state.current = lastStart;
-    await render();
+    await loadPath(prevPath, { resetProgress: true });
   } catch (e) {
     console.error('autoOpenPrevBook failed:', e);
   } finally {
@@ -1150,6 +1181,14 @@ document.addEventListener('keydown', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+  if (settingsModal && settingsModal.style.display !== 'none') {
+    if (e.key === 'Escape') settingsModal.style.display = 'none';
+    return;
+  }
+  if (aboutModal && aboutModal.style.display !== 'none') {
+    if (e.key === 'Escape') aboutModal.style.display = 'none';
+    return;
+  }
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
     e.preventDefault(); goNext();
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Backspace') {
@@ -1278,12 +1317,23 @@ btnNight.addEventListener('click', () => {
 });
 
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('btn-settings').addEventListener('click', () => {
+  if (settingsModal) settingsModal.style.display = 'flex';
+});
 document.getElementById('btn-about').addEventListener('click', () => {
   if (aboutModal) aboutModal.style.display = 'flex';
+});
+document.getElementById('settings-close').addEventListener('click', () => {
+  if (settingsModal) settingsModal.style.display = 'none';
 });
 document.getElementById('about-close').addEventListener('click', () => {
   if (aboutModal) aboutModal.style.display = 'none';
 });
+if (settingsModal) {
+  settingsModal.addEventListener('click', (e) => {
+    if (e.target === settingsModal) settingsModal.style.display = 'none';
+  });
+}
 if (aboutModal) {
   aboutModal.addEventListener('click', (e) => {
     if (e.target === aboutModal) aboutModal.style.display = 'none';
@@ -1295,6 +1345,14 @@ window.api.onFullscreenChanged((isFull) => {
   document.body.classList.toggle('fullscreen', isFull);
   document.getElementById('btn-fullscreen').classList.toggle('active', isFull);
   if (state.pages.length) applyTransform();
+  if (!isFull) {
+    if (cursorHideTimer) clearTimeout(cursorHideTimer);
+    cursorHiddenByIdle = false;
+    showViewerCursor();
+  } else {
+    showViewerCursor();
+    scheduleCursorHide();
+  }
 });
 
 function setFit(mode) {
@@ -1429,14 +1487,21 @@ viewer.addEventListener('mousedown', (e) => {
   panScrollX = viewer.scrollLeft;
   panScrollY = viewer.scrollTop;
   e.preventDefault();
+  showViewerCursor();
+  scheduleCursorHide();
 });
 
 document.addEventListener('mousemove', (e) => {
+  if (document.body.classList.contains('fullscreen')) {
+    showViewerCursor();
+    scheduleCursorHide();
+  }
   if (!panning) return;
   const dx = e.clientX - panStartX;
   const dy = e.clientY - panStartY;
   if (!panMoved && (Math.abs(dx) > PAN_THRESHOLD || Math.abs(dy) > PAN_THRESHOLD)) {
     panMoved = true;
+    cursorHiddenByIdle = false;
     viewer.style.cursor = 'grabbing';
   }
   if (panMoved) {
@@ -1448,10 +1513,12 @@ document.addEventListener('mousemove', (e) => {
 document.addEventListener('mouseup', () => {
   if (panning) {
     panning = false;
-    viewer.style.cursor = state.pages.length ? 'grab' : '';
+    showViewerCursor();
   }
   // 다음 클릭 확대가 막히지 않도록 드래그 플래그를 항상 정리
   panMoved = false;
+  showViewerCursor();
+  scheduleCursorHide();
 });
 
 // ── 사이드바 수직 리사이즈 (탐색기/페이지 구분) ───────────

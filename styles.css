@@ -646,6 +646,9 @@ body.fullscreen #viewer { background: #000; }
   box-shadow: 0 12px 36px rgba(0, 0, 0, 0.45);
   overflow: hidden;
 }
+.settings-card {
+  width: min(680px, calc(100vw - 32px));
+}
 .modal-title-row {
   display: flex;
   align-items: center;
@@ -659,12 +662,72 @@ body.fullscreen #viewer { background: #000; }
   padding: 14px 14px 16px;
   color: var(--subtext1);
   line-height: 1.7;
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
 }
+.modal-body-content { flex: 1; min-width: 0; }
 .modal-body p { margin-bottom: 6px; }
 .modal-body hr {
   border: none;
   border-top: 1px solid var(--surface0);
   margin: 10px 0;
+}
+.settings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.settings-section {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--surface0);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.settings-section-title {
+  color: var(--mauve);
+  font-weight: 700;
+  font-size: 12px;
+  margin-bottom: 8px;
+}
+.shortcut-grid {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 2fr;
+  gap: 6px 12px;
+  font-size: 12px;
+}
+.shortcut-key {
+  color: var(--text);
+  background: var(--surface0);
+  border: 1px solid var(--surface1);
+  border-radius: 6px;
+  padding: 3px 7px;
+  font-family: Consolas, 'Courier New', monospace;
+}
+.shortcut-desc {
+  color: var(--subtext1);
+  align-self: center;
+}
+.quick-guide p {
+  margin-bottom: 5px;
+}
+.quick-guide p:last-child {
+  margin-bottom: 0;
+}
+.about-logo {
+  flex: 0 0 96px;
+  display: flex;
+  justify-content: flex-end;
+}
+.about-logo-img {
+  width: 84px;
+  height: 84px;
+  object-fit: contain;
+  border-radius: 8px;
+  display: block;
+  background: transparent;
+  border: none;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
 }
 
 /* ZIP 폴더 선택 UI */
