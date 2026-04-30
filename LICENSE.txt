@@ -1,0 +1,13 @@
+Jovana Viewer - Proprietary License
+
+Copyright (c) 2026 Jovana Viewer.
+All rights reserved.
+
+This software is provided for personal use only.
+
+Without prior written consent from the author, commercial distribution,
+resale, bundling for sale, or any other commercial use of this software
+is strictly prohibited.
+
+Unauthorized commercial distribution or use may result in civil and
+criminal liability under applicable laws.

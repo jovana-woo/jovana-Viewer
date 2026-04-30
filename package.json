@@ -2,11 +2,14 @@
   "name": "jovana-viewer",
   "version": "1.0.0",
   "description": "Jovana Viewer - Comic Book Reader",
+  "author": "Jovana/조동연/",
+  "license": "SEE LICENSE IN LICENSE.txt",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "build": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win",
-    "build:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable"
+    "build:portable": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win portable",
+    "build:nsis:x64": "cross-env CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --win nsis --x64"
   },
   "build": {
     "appId": "com.jovana.viewer",

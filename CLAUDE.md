@@ -19,7 +19,9 @@ Jovana Viewer/
 ├── renderer.js      # 렌더러 로직 (상태 관리, 렌더링, 이벤트)
 ├── assets/
 │   └── icon.ico     # 앱 아이콘 (16x16 mauve 색상으로 자동 생성됨)
-└── package.json     # 빌드 설정 포함
+├── package.json     # 빌드 설정 포함 (NSIS x64 스크립트 포함)
+├── LICENSE.txt      # 저작권/상업적 배포 금지 라이선스
+└── RELEASE_CHECKLIST.md # 최종 배포 전 체크리스트
 ```
 
 ## 아키텍처
@@ -58,7 +60,10 @@ Jovana Viewer/
   rotation: 0,        // 0, 90, 180, 270
   rtl: false,         // 오른쪽→왼쪽 (일본 만화)
   fileName: '',       // 현재 열린 파일명 (표시용)
-  progressKey: ''     // 책/폴더별 진행상황 저장 키
+  progressKey: '',    // 책/폴더별 진행상황 저장 키
+  sourcePath: '',     // 현재 콘텐츠 원본 경로
+  sourceType: '',     // 'folder' | 'zip' | 'image'
+  autoSwitchingBook: false
 }
 ```
 
@@ -73,10 +78,13 @@ Jovana Viewer/
 
 - **두 장 보기 / 한 장 보기** 토글
 - **RTL 모드** (일본 만화 오른쪽→왼쪽)
+  - 버튼 라벨이 현재 방향으로 표시됨: `우→좌` / `좌→우`
+  - 읽기 방향 설정은 localStorage에 저장되어 앱 재실행 후에도 유지됨
 - **맞춤 모드**: 페이지 맞춤 / 너비 맞춤 / 높이 맞춤 / 수동 줌
 - **회전**: 90도씩 회전
 - **회전 저장**: 현재 페이지(두 장 보기면 2페이지) 회전 결과를 파일에 덮어쓰기 저장
 - **사이드바 썸네일**: 실제 이미지 썸네일(지연 로딩) + 파일명 + 페이지 번호
+  - zip/cbz 목록에서는 안정성 우선으로 썸네일 디코딩을 생략(플레이스홀더)
 - **사이드바 리사이즈**: 드래그로 너비 조절 (140~400px)
 - **사이드바 수직 분할 리사이즈**: 탐색기/페이지 섹션 높이 조절
 - **탐색기(Explorer)**: 폴더 이동, 상위 폴더, 파일/폴더 이름 변경, 휴지통 삭제
@@ -86,9 +94,17 @@ Jovana Viewer/
 - **드래그 앤 드롭**: 파일/폴더를 뷰어에 드롭
 - **키보드**: ←→ 또는 PgUp/PgDn 페이지 이동, +/- 줌, R 회전, F11 전체화면
 - **추가 키보드**: Home/End 이동, Space/Backspace 이동, Esc 전체화면 해제
-- **마우스 클릭**: 화면 왼쪽/오른쪽 클릭으로 페이지 이동
+- **마우스 클릭**:
+  - 단일 클릭: 현재 포인트 중심으로 1.35x 확대
+  - 더블 클릭: 원본 보기(페이지 맞춤) 복귀
+- **마우스 드래그 팬**: 확대 상태에서만 드래그 이동
 - **마우스 휠**: Ctrl+휠 줌 인/아웃, 일반 휠 페이지 이동
 - **페이지 점프**: 페이지 카운터 클릭 후 숫자 입력으로 이동
+- **사이드바 활성 항목 스크롤**: 현재 페이지 항목을 가능한 중앙(`center`)에 정렬
+- **정보 모달(About)**:
+  - 툴바 `ⓘ` 버튼으로 열기
+  - 제작자 표기: `Jovana/조동연/`
+  - 저작권 및 상업적 무단 배포 금지 안내 포함
 
 ## Catppuccin Macchiato 주요 컬러
 
@@ -118,7 +134,17 @@ npm start
 ```bash
 npm run build
 # → dist/Jovana Viewer Setup 1.0.0.exe 생성
+
+# 최종 배포용(고정): NSIS x64
+npm run build:nsis:x64
 ```
+
+### 배포 메타데이터
+
+- `author`: `Jovana/조동연/`
+- `license`: `SEE LICENSE IN LICENSE.txt`
+- 라이선스 고지: `LICENSE.txt` 참조
+- 최종 점검: `RELEASE_CHECKLIST.md` 참조
 
 ## 보안 점검 항목 (기능 유지 조건)
 
@@ -169,6 +195,26 @@ npm run build
   - `loadPath()` 시작 시 `setActiveRoot(filePath)` 호출로 현재 열람 루트 등록
   - 파일명/경로 표시 구간 일부를 `innerHTML`에서 `textContent` 기반 DOM 생성으로 변경
   - 대상: 최근 파일 목록, 탐색기 폴더/파일 목록 렌더링
+
+### 적용 메모 (2026-04-30)
+
+- `renderer.js`
+  - 전체화면/리사이즈 시 맞춤 재계산 강화
+  - 페이지 맞춤에서 비율 유지 + 과도 확대 방지
+  - 클릭 확대(1.35x), 더블클릭 원복, 확대 상태 드래그 이동으로 마우스 UX 조정
+  - 읽기 방향(`rtl`) 저장/복원(localStorage) + 버튼 라벨 동적 반영
+  - 사이드바 활성 페이지 자동 스크롤을 중앙 정렬로 변경
+  - About 모달(정보 버튼, ESC/오버레이 닫기) 추가
+- `index.html` / `styles.css`
+  - 시작 화면 법적 고지 문구 추가
+  - About 모달 UI 추가
+- `main.js`
+  - zip IPC 작업 직렬화 큐(`zipOpQueue`) 추가
+  - zip 캐시/오픈 작업 안정화(중복 open 방지, 캐시 상한)
+- 배포 준비
+  - `LICENSE.txt` 추가
+  - `RELEASE_CHECKLIST.md` 추가
+  - `package.json`에 배포 메타데이터 및 `build:nsis:x64` 스크립트 추가
 
 ## 알려진 이슈 / TODO
 

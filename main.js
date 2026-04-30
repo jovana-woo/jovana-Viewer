@@ -13,8 +13,17 @@ const LIMITS = {
 // outer zip: yauzl 기반 (파일 전체를 메모리에 올리지 않음 → 크기 제한 없음)
 const outerZipCache = new Map(); // filePath → { zipfile, entryMap: Map<name, entry> }
 const innerZipCache = new Map(); // 'outerPath::innerName' → JSZip
+const outerZipOpenJobs = new Map(); // filePath → Promise
+let zipOpQueue = Promise.resolve();
+const MAX_OUTER_ZIP_CACHE = 2;
 const allowedRoots = [];
 const MAX_ALLOWED_ROOTS = 8;
+
+function runZipOp(task) {
+  const next = zipOpQueue.then(task, task);
+  zipOpQueue = next.then(() => {}, () => {});
+  return next;
+}
 
 function decodeZipName(buf) {
   if (typeof buf === 'string') return buf;
@@ -27,6 +36,9 @@ function decodeZipName(buf) {
 
 async function getOuterZip(filePath) {
   if (outerZipCache.has(filePath)) return outerZipCache.get(filePath);
+  if (outerZipOpenJobs.has(filePath)) return outerZipOpenJobs.get(filePath);
+
+  const openJob = (async () => {
   console.log('[YAUZL] 열기 시작:', path.basename(filePath));
   const { zipfile, entryMap } = await new Promise((resolve, reject) => {
     const yauzl = require('yauzl');
@@ -52,14 +64,29 @@ async function getOuterZip(filePath) {
     zipfile.close();
     throw new Error('Zip has too many entries');
   }
-  if (outerZipCache.size >= 3) {
-    const oldKey = outerZipCache.keys().next().value;
-    try { outerZipCache.get(oldKey).zipfile.close(); } catch {}
-    outerZipCache.delete(oldKey);
-  }
+  // 안정성 우선: 자동 전환 중에는 zipfile을 강제 close하지 않음
+  // (진행 중 read stream과 충돌 시 네이티브 크래시 가능)
   const cached = { zipfile, entryMap };
   outerZipCache.set(filePath, cached);
+  while (outerZipCache.size > MAX_OUTER_ZIP_CACHE) {
+    const oldKey = outerZipCache.keys().next().value;
+    if (oldKey === filePath) break;
+    const old = outerZipCache.get(oldKey);
+    try { old.zipfile.close(); } catch {}
+    outerZipCache.delete(oldKey);
+    for (const k of [...innerZipCache.keys()]) {
+      if (k.startsWith(oldKey + '::')) innerZipCache.delete(k);
+    }
+  }
   return cached;
+  })();
+
+  outerZipOpenJobs.set(filePath, openJob);
+  try {
+    return await openJob;
+  } finally {
+    outerZipOpenJobs.delete(filePath);
+  }
 }
 
 function readYauzlEntry(zipfile, entry) {
@@ -91,7 +118,7 @@ async function getInnerZip(outerPath, innerName) {
       throw new Error('Inner zip has too many entries');
     }
     innerZipCache.set(key, inner);
-    if (innerZipCache.size > 10) innerZipCache.delete(innerZipCache.keys().next().value);
+    if (innerZipCache.size > 2) innerZipCache.delete(innerZipCache.keys().next().value);
   }
   return innerZipCache.get(key);
 }
@@ -245,6 +272,7 @@ ipcMain.handle('read-image', async (_, filePath) => {
 ipcMain.handle('read-zip-list', async (_, filePath) => {
   const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
   const zipExts = ['.zip', '.cbz'];
+  return runZipOp(async () => {
   try {
     if (!isSafePathInput(filePath)) return [];
     const { entryMap } = await getOuterZip(filePath);
@@ -274,10 +302,12 @@ ipcMain.handle('read-zip-list', async (_, filePath) => {
   } catch {
     return [];
   }
+  });
 });
 
 // zip 파일 내 특정 이미지 읽기 (중첩 zip 지원: 'inner.zip::image.jpg')
 ipcMain.handle('read-zip-image', async (_, filePath, entryName) => {
+  return runZipOp(async () => {
   try {
     if (!isSafePathInput(filePath) || !isSafePathInput(entryName)) return null;
     let imgData, entryForExt;
@@ -307,6 +337,7 @@ ipcMain.handle('read-zip-image', async (_, filePath, entryName) => {
   } catch {
     return null;
   }
+  });
 });
 
 // 전체화면 토글
@@ -407,6 +438,7 @@ ipcMain.handle('save-image', async (_, filePath, dataUrl) => {
 // zip 내부 디렉토리 탐색 (한 레벨씩)
 ipcMain.handle('read-zip-dir', async (_, filePath, prefix) => {
   const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+  return runZipOp(async () => {
   try {
     if (!isSafePathInput(filePath)) return { folders: [], images: [] };
     const { entryMap } = await getOuterZip(filePath);
@@ -431,6 +463,7 @@ ipcMain.handle('read-zip-dir', async (_, filePath, prefix) => {
   } catch {
     return { folders: [], images: [] };
   }
+  });
 });
 
 // 파일 드롭 처리

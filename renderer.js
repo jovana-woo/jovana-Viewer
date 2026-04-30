@@ -8,7 +8,10 @@ const state = {
   rotation: 0,
   rtl: false,
   fileName: '',
-  progressKey: ''
+  progressKey: '',
+  sourcePath: '',
+  sourceType: '',
+  autoSwitchingBook: false
 };
 
 const zipBrowseState = { zipPath: null, prefix: null, history: [] };
@@ -19,6 +22,14 @@ function saveProgress(key, idx) {
 }
 function loadProgress(key) {
   try { const v = localStorage.getItem('pg:' + key); return v !== null ? parseInt(v) : 0; } catch { return 0; }
+}
+
+function saveReadingDirection(isRtl) {
+  try { localStorage.setItem('reading-direction-rtl', isRtl ? '1' : '0'); } catch {}
+}
+
+function loadReadingDirection() {
+  try { return localStorage.getItem('reading-direction-rtl') === '1'; } catch { return false; }
 }
 
 // ── 최근 파일 ─────────────────────────────────────────────
@@ -79,6 +90,14 @@ const statusMode    = document.getElementById('status-mode');
 const statusZoom    = document.getElementById('status-zoom');
 const pageInfo      = document.getElementById('page-info');
 const tabTitle      = document.getElementById('tab-title');
+const aboutModal    = document.getElementById('about-modal');
+const btnRtl        = document.getElementById('btn-rtl');
+
+function syncReadingDirectionUI() {
+  btnRtl.classList.toggle('active', state.rtl);
+  btnRtl.textContent = state.rtl ? '우→좌' : '좌→우';
+  btnRtl.title = state.rtl ? '읽기 방향: 우→좌 (일본)' : '읽기 방향: 좌→우 (한국)';
+}
 
 // ── 탐색기 ────────────────────────────────────────────────
 const explorerState = { path: null, parent: null, currentFile: null, files: [],
@@ -388,6 +407,8 @@ async function loadZip(filePath) {
   zipBrowseState.prefix = '';
   zipBrowseState.history = [];
   state.fileName = zipName;
+  state.sourcePath = filePath;
+  state.sourceType = 'zip';
   saveRecent(filePath, zipName, 'zip');
   tabTitle.textContent = zipName;
   await enterZipDir(filePath, '');
@@ -514,6 +535,8 @@ async function loadFolder(folderPath) {
   state.progressKey = folderPath;
   state.current = Math.min(loadProgress(folderPath), files.length - 1);
   state.fileName = folderPath.split(/[\\/]/).pop();
+  state.sourcePath = folderPath;
+  state.sourceType = 'folder';
   saveRecent(folderPath, state.fileName, 'folder');
   tabTitle.textContent = state.fileName;
   buildSidebar();
@@ -534,6 +557,8 @@ async function loadImageFile(filePath) {
   state.rotation = 0;
   state.progressKey = folder;
   state.fileName = filePath.split(/[\\/]/).pop();
+  state.sourcePath = filePath;
+  state.sourceType = 'image';
   saveRecent(filePath, state.fileName, 'image');
   tabTitle.textContent = state.fileName;
   buildSidebar();
@@ -628,6 +653,16 @@ async function render() {
     pageRight.style.display = 'none';
   }
 
+  // 이미지 디코딩 완료 후 한 번 더 맞춤을 적용해 비율/크기 오차를 줄임
+  const reflowOnLoad = (imgEl) => {
+    if (!imgEl || !imgEl.src || imgEl.style.display === 'none') return;
+    imgEl.onload = () => {
+      if (state.pages.length) applyTransform();
+    };
+  };
+  reflowOnLoad(pageLeft);
+  reflowOnLoad(pageRight);
+
   applyTransform();
   updateUI();
   highlightSidebar();
@@ -640,23 +675,42 @@ function applyTransform() {
   pageLeft.style.transform = rot;
   pageRight.style.transform = rot;
 
+  // 맞춤 모드에서는 스크롤 없이 한 화면에 고정, 수동 줌에서만 스크롤 허용
+  viewer.style.overflow = state.fitMode === 'manual' ? 'auto' : 'hidden';
+  pagesContainer.style.padding = state.fitMode === 'manual' ? '16px' : '0';
   pagesContainer.style.paddingTop = '';
   pagesContainer.style.paddingBottom = '';
+
+  const fitImageToBounds = (imgEl, maxW, maxH) => {
+    if (!imgEl || imgEl.style.display === 'none') return;
+    const naturalW = imgEl.naturalWidth || 0;
+    const naturalH = imgEl.naturalHeight || 0;
+
+    if (!naturalW || !naturalH) {
+      // 아직 이미지 메타가 없으면 기존 방식으로 임시 적용
+      imgEl.style.width = maxW + 'px';
+      imgEl.style.height = '';
+      imgEl.style.maxWidth = '';
+      imgEl.style.maxHeight = maxH + 'px';
+      return;
+    }
+
+    // 페이지 맞춤에서는 원본보다 과도한 확대를 막고 비율 유지
+    const scale = Math.min(maxW / naturalW, maxH / naturalH, 1);
+    imgEl.style.width = Math.floor(naturalW * scale) + 'px';
+    imgEl.style.height = Math.floor(naturalH * scale) + 'px';
+    imgEl.style.maxWidth = '';
+    imgEl.style.maxHeight = '';
+  };
 
   if (state.fitMode === 'page') {
     const vw = viewer.clientWidth - 40;
     const vh = viewer.clientHeight - 40;
     const count = (state.doubleView && state.current + 1 < state.pages.length) ? 2 : 1;
     const maxW = Math.floor((vw - (count > 1 ? 4 : 0)) / count);
-    pageLeft.style.width = maxW + 'px';
-    pageLeft.style.height = '';
-    pageLeft.style.maxWidth = '';
-    pageLeft.style.maxHeight = vh + 'px';
+    fitImageToBounds(pageLeft, maxW, vh);
     if (pageRight.style.display !== 'none') {
-      pageRight.style.width = maxW + 'px';
-      pageRight.style.height = '';
-      pageRight.style.maxWidth = '';
-      pageRight.style.maxHeight = vh + 'px';
+      fitImageToBounds(pageRight, maxW, vh);
     }
   } else if (state.fitMode === 'width') {
     const vw = viewer.clientWidth - 40;
@@ -727,6 +781,15 @@ function updateUI() {
   updateSaveBtn();
 }
 
+function resetTransientZoom() {
+  if (state.fitMode !== 'manual') return;
+  state.fitMode = 'page';
+  state.zoom = 1;
+  ['width','height','page'].forEach(m => {
+    document.getElementById('btn-fit-' + m).classList.toggle('active', m === 'page');
+  });
+}
+
 // ── 사이드바 썸네일 ───────────────────────────────────────
 let thumbObserver = null;
 
@@ -759,6 +822,13 @@ function buildSidebar() {
       const idx = parseInt(thumb.dataset.idx);
       const page = state.pages[idx];
       if (!page) continue;
+      // 안정성 우선: zip/cbz는 썸네일 디코딩을 생략하여 과부하/크래시를 방지
+      if (page.type === 'zip') {
+        thumbObserver.unobserve(thumb);
+        thumb.removeAttribute('src');
+        thumb.style.background = 'var(--surface1)';
+        continue;
+      }
       thumbObserver.unobserve(thumb);
       const raw = await loadPageImage(page);
       if (raw) thumb.src = await makeThumbnail(raw);
@@ -814,7 +884,11 @@ function buildSidebar() {
     item.appendChild(thumb);
     item.appendChild(name);
     item.appendChild(delBtn);
-    item.addEventListener('click', () => { state.current = i; render(); });
+    item.addEventListener('click', () => {
+      resetTransientZoom();
+      state.current = i;
+      render();
+    });
     fileList.appendChild(item);
   });
 }
@@ -829,20 +903,24 @@ function highlightSidebar() {
   });
   // 스크롤 하이라이트된 항목으로
   const activeEl = fileList.querySelector('.file-item.active');
-  if (activeEl) activeEl.scrollIntoView({ block: 'nearest' });
+  if (activeEl) activeEl.scrollIntoView({ block: 'center', inline: 'nearest' });
 }
 
 // ── 네비게이션 ────────────────────────────────────────────
 function goNext() {
+  if (state.autoSwitchingBook) return;
   const step = state.doubleView ? 2 : 1;
   if (state.current + step < state.pages.length) {
+    resetTransientZoom();
     state.current = Math.min(state.current + step, state.pages.length - 1);
     render();
   }
 }
 function goPrev() {
+  if (state.autoSwitchingBook) return;
   const step = state.doubleView ? 2 : 1;
   if (state.current - step >= 0) {
+    resetTransientZoom();
     state.current = Math.max(state.current - step, 0);
     render();
   }
@@ -850,6 +928,84 @@ function goPrev() {
 
 document.getElementById('btn-next').addEventListener('click', goNext);
 document.getElementById('btn-prev').addEventListener('click', goPrev);
+
+async function autoOpenNextBook() {
+  if (state.autoSwitchingBook) return;
+  state.autoSwitchingBook = true;
+  try {
+    if (!state.sourcePath) return;
+    const src = state.sourcePath;
+    const slash = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
+    if (slash <= 0) return;
+
+    const parentPath = src.slice(0, slash);
+    const currentName = src.slice(slash + 1);
+    if (!parentPath || !currentName) return;
+
+    const dir = await window.api.readDirEntries(parentPath);
+    const isFolderSource = state.sourceType === 'folder';
+    const isArchiveSource = state.sourceType === 'zip';
+    const archiveExt = ['zip', 'cbz', 'cbr', 'rar'];
+    const list = isFolderSource
+      ? dir.dirs
+      : isArchiveSource
+      ? dir.files.filter((n) => archiveExt.includes((n.split('.').pop() || '').toLowerCase()))
+      : dir.files;
+    const idx = list.findIndex(n => n.toLowerCase() === currentName.toLowerCase());
+    if (idx < 0 || idx + 1 >= list.length) return;
+
+    const nextName = list[idx + 1];
+    const sep = parentPath.includes('/') ? '/' : '\\';
+    const nextPath = parentPath.replace(/[/\\]+$/, '') + sep + nextName;
+    await loadPath(nextPath);
+  } catch (e) {
+    console.error('autoOpenNextBook failed:', e);
+  } finally {
+    state.autoSwitchingBook = false;
+  }
+}
+
+async function autoOpenPrevBook() {
+  if (state.autoSwitchingBook) return;
+  state.autoSwitchingBook = true;
+  try {
+    if (!state.sourcePath) return;
+    const src = state.sourcePath;
+    const slash = Math.max(src.lastIndexOf('/'), src.lastIndexOf('\\'));
+    if (slash <= 0) return;
+
+    const parentPath = src.slice(0, slash);
+    const currentName = src.slice(slash + 1);
+    if (!parentPath || !currentName) return;
+
+    const dir = await window.api.readDirEntries(parentPath);
+    const isFolderSource = state.sourceType === 'folder';
+    const isArchiveSource = state.sourceType === 'zip';
+    const archiveExt = ['zip', 'cbz', 'cbr', 'rar'];
+    const list = isFolderSource
+      ? dir.dirs
+      : isArchiveSource
+      ? dir.files.filter((n) => archiveExt.includes((n.split('.').pop() || '').toLowerCase()))
+      : dir.files;
+    const idx = list.findIndex(n => n.toLowerCase() === currentName.toLowerCase());
+    if (idx <= 0) return;
+
+    const prevName = list[idx - 1];
+    const sep = parentPath.includes('/') ? '/' : '\\';
+    const prevPath = parentPath.replace(/[/\\]+$/, '') + sep + prevName;
+    await loadPath(prevPath);
+
+    if (!state.pages.length) return;
+    resetTransientZoom();
+    const lastStart = Math.max(state.pages.length - (state.doubleView ? 2 : 1), 0);
+    state.current = lastStart;
+    await render();
+  } catch (e) {
+    console.error('autoOpenPrevBook failed:', e);
+  } finally {
+    state.autoSwitchingBook = false;
+  }
+}
 
 // 페이지 카운터 클릭 → 페이지 점프
 pageCounter.addEventListener('click', () => {
@@ -867,6 +1023,7 @@ pageCounter.addEventListener('click', () => {
     input.replaceWith(pageCounter);
     if (jump) {
       let val = Math.max(1, Math.min(total, parseInt(input.value) || state.current + 1));
+      resetTransientZoom();
       state.current = val - 1;
       if (state.doubleView && state.current % 2 !== 0) state.current = Math.max(0, state.current - 1);
       render();
@@ -894,13 +1051,19 @@ document.addEventListener('keydown', (e) => {
   } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp' || e.key === 'PageUp' || e.key === 'Backspace') {
     e.preventDefault(); goPrev();
   } else if (e.key === 'Home') {
+    resetTransientZoom();
     state.current = 0; render();
   } else if (e.key === 'End') {
+    resetTransientZoom();
     state.current = Math.max(state.pages.length - (state.doubleView ? 2 : 1), 0);
     render();
   } else if (e.key === 'F11') {
     toggleFullscreen();
   } else if (e.key === 'Escape') {
+    if (aboutModal && aboutModal.style.display !== 'none') {
+      aboutModal.style.display = 'none';
+      return;
+    }
     window.api.exitFullscreen();
   } else if (e.key === 'r' || e.key === 'R') {
     rotate();
@@ -911,16 +1074,39 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 클릭으로 페이지 넘기기 (드래그와 구분)
+// 단일 클릭하면 확대 (페이지 이동 없음)
 viewer.addEventListener('click', (e) => {
   if (panMoved) return;
+  if (e.detail !== 1) return; // 더블클릭 중복 확대 방지
   if (!state.pages.length) return;
-  const vw = viewer.clientWidth;
-  if (e.clientX < vw / 2) {
-    state.rtl ? goNext() : goPrev();
-  } else {
-    state.rtl ? goPrev() : goNext();
-  }
+  if (state.fitMode === 'manual' && state.zoom > 1) return;
+
+  const rect = viewer.getBoundingClientRect();
+  const clickX = Math.max(0, Math.min(rect.width, e.clientX - rect.left));
+  const clickY = Math.max(0, Math.min(rect.height, e.clientY - rect.top));
+  const ratioX = rect.width ? (clickX / rect.width) : 0.5;
+  const ratioY = rect.height ? (clickY / rect.height) : 0.5;
+
+  state.fitMode = 'manual';
+  state.zoom = 1.35;
+  ['width','height','page'].forEach(m => document.getElementById('btn-fit-' + m).classList.remove('active'));
+  applyTransform();
+  updateUI();
+
+  requestAnimationFrame(() => {
+    const targetX = ratioX * viewer.scrollWidth - viewer.clientWidth / 2;
+    const targetY = ratioY * viewer.scrollHeight - viewer.clientHeight / 2;
+    viewer.scrollTo(Math.max(0, targetX), Math.max(0, targetY));
+  });
+});
+
+// 더블클릭하면 현재 페이지를 원본 보기(페이지 맞춤)로 복귀
+viewer.addEventListener('dblclick', (e) => {
+  e.preventDefault();
+  if (!state.pages.length) return;
+  resetTransientZoom();
+  applyTransform();
+  updateUI();
 });
 
 // ── 도구모음 버튼 ─────────────────────────────────────────
@@ -947,19 +1133,31 @@ document.getElementById('btn-double').addEventListener('click', () => {
   render();
 });
 
-document.getElementById('btn-rtl').addEventListener('click', () => {
+btnRtl.addEventListener('click', () => {
   state.rtl = !state.rtl;
-  document.getElementById('btn-rtl').classList.toggle('active', state.rtl);
+  saveReadingDirection(state.rtl);
+  syncReadingDirectionUI();
   render();
 });
 
 document.getElementById('btn-fullscreen').addEventListener('click', toggleFullscreen);
+document.getElementById('btn-about').addEventListener('click', () => {
+  if (aboutModal) aboutModal.style.display = 'flex';
+});
+document.getElementById('about-close').addEventListener('click', () => {
+  if (aboutModal) aboutModal.style.display = 'none';
+});
+if (aboutModal) {
+  aboutModal.addEventListener('click', (e) => {
+    if (e.target === aboutModal) aboutModal.style.display = 'none';
+  });
+}
 
 // OS 레벨 전체화면 상태 동기화
 window.api.onFullscreenChanged((isFull) => {
   document.body.classList.toggle('fullscreen', isFull);
   document.getElementById('btn-fullscreen').classList.toggle('active', isFull);
-  if (!isFull && state.pages.length) applyTransform();
+  if (state.pages.length) applyTransform();
 });
 
 function setFit(mode) {
@@ -1066,6 +1264,7 @@ const PAN_THRESHOLD = 5;
 
 viewer.addEventListener('mousedown', (e) => {
   if (e.button !== 0) return;
+  if (!(state.fitMode === 'manual' && state.zoom > 1)) return;
   panning = true;
   panMoved = false;
   panStartX = e.clientX;
@@ -1094,6 +1293,8 @@ document.addEventListener('mouseup', () => {
     panning = false;
     viewer.style.cursor = state.pages.length ? 'grab' : '';
   }
+  // 다음 클릭 확대가 막히지 않도록 드래그 플래그를 항상 정리
+  panMoved = false;
 });
 
 // ── 사이드바 수직 리사이즈 (탐색기/페이지 구분) ───────────
@@ -1172,8 +1373,10 @@ document.addEventListener('mouseup', () => {
 
 // ── 리사이즈 시 맞춤 재적용 ──────────────────────────────
 window.addEventListener('resize', () => {
-  if (state.pages.length && !document.body.classList.contains('fullscreen')) applyTransform();
+  if (state.pages.length) applyTransform();
 });
 
 // ── 초기화 ────────────────────────────────────────────────
+state.rtl = loadReadingDirection();
+syncReadingDirectionUI();
 buildRecentList();
