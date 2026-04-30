@@ -487,6 +487,8 @@ body {
 .tool-btn:hover { background: var(--surface0); color: var(--text); }
 .tool-btn.active { color: var(--mauve); background: var(--surface0); }
 .tool-btn:disabled { opacity: 0.35; cursor: default; }
+#btn-save-rotation.active { background: var(--mauve); color: var(--base); }
+#btn-save-rotation.active:hover { background: var(--lavender); color: var(--base); }
 
 #page-counter {
   color: var(--subtext0);

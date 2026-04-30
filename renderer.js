@@ -18,6 +18,7 @@ const state = {
 };
 
 const zipBrowseState = { zipPath: null, prefix: null, history: [] };
+let loadSeq = 0; // 동시 로드 충돌 방지용 시퀀스
 
 // ── 진행상황 저장 ─────────────────────────────────────────
 function saveProgress(key, idx) {
@@ -386,11 +387,15 @@ async function browseDir(dirPath) {
     item.appendChild(nameEl);
     item.title = dir;
     item.appendChild(makeActions(fullPath, dir, true));
-    item.addEventListener('click', () => {
-      browseDir(fullPath);
-      loadPath(fullPath, { resetProgress: true });
-      const sec = document.getElementById('section-pages');
-      if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
+    item.addEventListener('click', async () => {
+      const info = await window.api.inspectFolder(fullPath);
+      if (info && info.hasDirectImages) {
+        loadPath(fullPath, { resetProgress: true });
+        const sec = document.getElementById('section-pages');
+        if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
+        return;
+      }
+      await browseDir(fullPath);
     });
     list.appendChild(item);
   });
@@ -453,26 +458,28 @@ document.addEventListener('click', () => openDropdown.classList.remove('visible'
 
 
 async function loadPath(filePath, options = {}) {
+  const mySeq = ++loadSeq;
   const { resetProgress = false } = options;
-  // 쓰기 계열 IPC(delete/rename/save)의 허용 루트를 현재 열람 경로로 등록
   await window.api.setActiveRoot(filePath);
+  if (mySeq !== loadSeq) return;
   const type = await window.api.getFileType(filePath);
+  if (mySeq !== loadSeq) return;
   explorerState.currentFile = filePath;
   const parent = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
-  // 폴더 모드: 탐색기에 부모 폴더(권 목록)를 표시 — zip 모드와 동일한 방식
   const explorerDir = (type === 'folder' && parent) ? parent : parent || filePath;
   await browseDir(explorerDir);
+  if (mySeq !== loadSeq) return;
   if (type === 'zip') {
-    await loadZip(filePath, { resetProgress });
+    await loadZip(filePath, { resetProgress, _seq: mySeq });
   } else if (type === 'folder') {
-    await loadFolder(filePath, { resetProgress });
+    await loadFolder(filePath, { resetProgress, _seq: mySeq });
   } else if (type === 'image') {
-    await loadImageFile(filePath, { resetProgress });
+    await loadImageFile(filePath, { resetProgress, _seq: mySeq });
   }
 }
 
 async function loadZip(filePath, options = {}) {
-  const { resetProgress = false } = options;
+  const { resetProgress = false, _seq } = options;
   const zipName = filePath.split(/[\\/]/).pop();
   zipBrowseState.zipPath = filePath;
   zipBrowseState.prefix = '';
@@ -490,18 +497,19 @@ async function loadZip(filePath, options = {}) {
     if (lastPrefix) {
       const lastDir = await window.api.readZipDir(filePath, lastPrefix);
       if ((lastDir.images && lastDir.images.length > 0) || (lastDir.folders && lastDir.folders.length > 0)) {
-        await enterZipDir(filePath, lastPrefix, { resetProgress });
+        await enterZipDir(filePath, lastPrefix, { resetProgress, _seq });
         return;
       }
     }
   }
-  await enterZipDir(filePath, '', { resetProgress });
+  await enterZipDir(filePath, '', { resetProgress, _seq });
 }
 
 async function enterZipDir(zipPath, prefix, options = {}) {
-  const { resetProgress = false } = options;
+  const { resetProgress = false, _seq } = options;
   zipBrowseState.prefix = prefix;
   const dir = await window.api.readZipDir(zipPath, prefix);
+  if (_seq !== undefined && _seq !== loadSeq) return;
 
   if (dir.folders.length > 0) {
     browseZipDir(zipPath, prefix, dir.folders);
@@ -511,17 +519,18 @@ async function enterZipDir(zipPath, prefix, options = {}) {
     const zipName = zipPath.split(/[\\/]/).pop();
     const folderLabel = prefix ? prefix.split('/').pop() : '';
     const displayName = folderLabel ? zipName + ' / ' + folderLabel : zipName;
-    await loadZipImages(zipPath, dir.images, displayName, { resetProgress });
+    await loadZipImages(zipPath, dir.images, displayName, { resetProgress, _seq });
   } else if (dir.folders.length > 0) {
     showZipFolderPicker(zipPath, prefix, dir.folders);
   } else if (!prefix) {
     // 루트에서 이미지/폴더 없음 → inner zip 폴백 (readZipList)
     const entries = await window.api.readZipList(zipPath);
+    if (_seq !== undefined && _seq !== loadSeq) return;
     if (!entries.length) {
       alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
       return;
     }
-    await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop(), { resetProgress });
+    await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop(), { resetProgress, _seq });
   } else {
     alert('이 폴더에 이미지가 없습니다.');
   }
@@ -588,7 +597,7 @@ function showZipFolderPicker(zipPath, prefix, folders) {
 }
 
 async function loadZipImages(zipPath, entries, displayName, options = {}) {
-  const { resetProgress = false } = options;
+  const { resetProgress = false, _seq } = options;
   state.pages = entries.map(e => ({ type: 'zip', zipPath, entry: e }));
   state.rotation = 0;
   const progressKey = zipPath + (zipBrowseState.prefix ? '::' + zipBrowseState.prefix : '');
@@ -605,18 +614,21 @@ async function loadZipImages(zipPath, entries, displayName, options = {}) {
     const parentPrefix = slashIdx >= 0 ? curPrefix.slice(0, slashIdx) : '';
     const currentFolder = curPrefix.slice(slashIdx + 1);
     const parentDir = await window.api.readZipDir(zipPath, parentPrefix);
+    if (_seq !== undefined && _seq !== loadSeq) return;
     if (parentDir.folders.length > 0) {
       browseZipDir(zipPath, parentPrefix, parentDir.folders, currentFolder);
     }
   }
 
+  if (_seq !== undefined && _seq !== loadSeq) return;
   buildSidebar();
   await render();
 }
 
 async function loadFolder(folderPath, options = {}) {
-  const { resetProgress = false } = options;
+  const { resetProgress = false, _seq } = options;
   const files = await window.api.readFolder(folderPath);
+  if (_seq !== undefined && _seq !== loadSeq) return;
   if (!files.length) return;
   state.pages = files.map(f => ({ type: 'file', src: f }));
   state.rotation = 0;
@@ -632,9 +644,10 @@ async function loadFolder(folderPath, options = {}) {
 }
 
 async function loadImageFile(filePath, options = {}) {
-  const { resetProgress = false } = options;
+  const { resetProgress = false, _seq } = options;
   const folder = filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
   const files = await window.api.readFolder(folder);
+  if (_seq !== undefined && _seq !== loadSeq) return;
   if (files.length) {
     state.pages = files.map(f => ({ type: 'file', src: f }));
     if (resetProgress) {
@@ -1089,6 +1102,7 @@ async function autoOpenNextBook() {
   if (state.autoSwitchingBook) return;
   state.autoSwitchingBook = true;
   updateUI();
+  const autoSeq = ++loadSeq;
   try {
     if (!state.sourcePath) return;
 
@@ -1100,10 +1114,11 @@ async function autoOpenNextBook() {
       const parentPrefix = slashIdx >= 0 ? currentPrefix.slice(0, slashIdx) : '';
       const currentFolder = slashIdx >= 0 ? currentPrefix.slice(slashIdx + 1) : currentPrefix;
       const dir = await window.api.readZipDir(currentZipPath, parentPrefix);
+      if (autoSeq !== loadSeq) return;
       const idx = dir.folders.findIndex(f => f.toLowerCase() === currentFolder.toLowerCase());
       if (idx < 0 || idx + 1 >= dir.folders.length) return;
       const nextPrefix = parentPrefix ? parentPrefix + '/' + dir.folders[idx + 1] : dir.folders[idx + 1];
-      await enterZipDir(currentZipPath, nextPrefix, { resetProgress: true });
+      await enterZipDir(currentZipPath, nextPrefix, { resetProgress: true, _seq: autoSeq });
       return;
     }
 
@@ -1143,6 +1158,7 @@ async function autoOpenPrevBook() {
   if (state.autoSwitchingBook) return;
   state.autoSwitchingBook = true;
   updateUI();
+  const autoSeq = ++loadSeq;
   try {
     if (!state.sourcePath) return;
 
@@ -1154,10 +1170,11 @@ async function autoOpenPrevBook() {
       const parentPrefix = slashIdx >= 0 ? currentPrefix.slice(0, slashIdx) : '';
       const currentFolder = slashIdx >= 0 ? currentPrefix.slice(slashIdx + 1) : currentPrefix;
       const dir = await window.api.readZipDir(currentZipPath, parentPrefix);
+      if (autoSeq !== loadSeq) return;
       const idx = dir.folders.findIndex(f => f.toLowerCase() === currentFolder.toLowerCase());
       if (idx <= 0) return;
       const prevPrefix = parentPrefix ? parentPrefix + '/' + dir.folders[idx - 1] : dir.folders[idx - 1];
-      await enterZipDir(currentZipPath, prevPrefix, { resetProgress: true });
+      await enterZipDir(currentZipPath, prevPrefix, { resetProgress: true, _seq: autoSeq });
       if (state.pages.length > 0) {
         const s = state.doubleView ? 2 : 1;
         state.current = Math.max(0, state.pages.length - s);

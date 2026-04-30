@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld('api', {
   openFolder: () => ipcRenderer.invoke('open-folder-dialog'),
 
   readFolder: (folderPath) => ipcRenderer.invoke('read-folder', folderPath),
+  inspectFolder: (folderPath) => ipcRenderer.invoke('inspect-folder', folderPath),
   readImage: (filePath) => ipcRenderer.invoke('read-image', filePath),
   readZipList: (filePath) => ipcRenderer.invoke('read-zip-list', filePath),
   readZipDir: (filePath, prefix) => ipcRenderer.invoke('read-zip-dir', filePath, prefix),

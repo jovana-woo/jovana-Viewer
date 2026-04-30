@@ -253,6 +253,34 @@ ipcMain.handle('read-folder', async (_, folderPath) => {
   }
 });
 
+// 폴더 내 직계 이미지/하위 폴더 유무 점검
+ipcMain.handle('inspect-folder', async (_, folderPath) => {
+  const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+  try {
+    if (!isSafePathInput(folderPath)) {
+      return { hasDirectImages: false, hasSubdirs: false, imageCount: 0 };
+    }
+    const entries = fs.readdirSync(folderPath, { withFileTypes: true });
+    let imageCount = 0;
+    let hasSubdirs = false;
+    for (const entry of entries) {
+      if (entry.isFile() && imgExts.includes(path.extname(entry.name).toLowerCase())) {
+        imageCount += 1;
+      } else if (entry.isDirectory() && !entry.name.startsWith('.')) {
+        hasSubdirs = true;
+      }
+      if (imageCount > 0 && hasSubdirs) break;
+    }
+    return {
+      hasDirectImages: imageCount > 0,
+      hasSubdirs,
+      imageCount
+    };
+  } catch {
+    return { hasDirectImages: false, hasSubdirs: false, imageCount: 0 };
+  }
+});
+
 // 이미지 파일을 base64로 읽기
 ipcMain.handle('read-image', async (_, filePath) => {
   try {
@@ -469,14 +497,14 @@ ipcMain.handle('read-zip-dir', async (_, filePath, prefix) => {
 // 파일 드롭 처리
 ipcMain.handle('get-file-type', async (_, filePath) => {
   if (!isSafePathInput(filePath)) return 'unknown';
+  try {
+    const stat = fs.statSync(filePath);
+    if (stat.isDirectory()) return 'folder';
+  } catch {}
   const ext = path.extname(filePath).toLowerCase();
   const zipExts = ['.zip', '.cbz', '.cbr', '.rar'];
   const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
   if (zipExts.includes(ext)) return 'zip';
   if (imgExts.includes(ext)) return 'image';
-  try {
-    const stat = fs.statSync(filePath);
-    if (stat.isDirectory()) return 'folder';
-  } catch {}
   return 'unknown';
 });
