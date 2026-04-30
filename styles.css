@@ -526,7 +526,9 @@ body {
   background: var(--base);
   outline: none;
   position: relative;
+  cursor: grab;
 }
+#viewer:active { cursor: grabbing; }
 
 #viewer::-webkit-scrollbar { width: 8px; height: 8px; }
 #viewer::-webkit-scrollbar-track { background: var(--mantle); }
@@ -555,8 +557,6 @@ body {
 }
 .drop-icon { font-size: 48px; margin-bottom: 12px; }
 .drop-sub { color: var(--surface2); font-size: 11px; margin-top: 6px; }
-
-#drop-zone.drag-over { background: rgba(198, 160, 246, 0.06); }
 
 #pages-container {
   display: none;
@@ -595,25 +595,80 @@ body.fullscreen #resizer { display: none; }
 body.fullscreen #tabbar { display: none; }
 body.fullscreen #statusbar { display: none; }
 body.fullscreen #viewer { background: #000; }
-body.fullscreen #pages-container { padding: 0; gap: 0; }
-body.fullscreen .page-img {
-  max-height: 100vh;
-  box-shadow: none;
-  border-radius: 0;
+
+
+/* ZIP 폴더 선택 UI */
+#zip-folder-picker {
+  flex-direction: column;
+  width: 100%;
+  min-height: calc(100vh - var(--tabbar-height) - var(--statusbar-height) - 36px);
+  padding: 24px;
+  overflow-y: auto;
+  align-items: flex-start;
+  justify-content: flex-start;
 }
 
-/* 드롭 오버레이 */
-#global-drop-overlay {
-  display: none;
-  position: fixed;
-  inset: 0;
-  background: rgba(198, 160, 246, 0.12);
-  border: 2px dashed var(--mauve);
-  z-index: 9999;
-  pointer-events: none;
+.zip-breadcrumb {
+  display: flex;
   align-items: center;
-  justify-content: center;
-  font-size: 18px;
-  color: var(--mauve);
+  gap: 10px;
+  margin-bottom: 20px;
+  color: var(--subtext0);
+  font-size: 13px;
+  width: 100%;
 }
-#global-drop-overlay.visible { display: flex; }
+
+.zip-back-btn {
+  background: var(--surface0);
+  border: none;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.zip-back-btn:hover { background: var(--surface1); }
+
+.zip-breadcrumb-path {
+  color: var(--subtext0);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.zip-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+
+.zip-folder-card {
+  background: var(--surface0);
+  border: 1px solid var(--surface1);
+  border-radius: 8px;
+  padding: 20px 12px 16px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  transition: background 0.12s, border-color 0.12s;
+}
+.zip-folder-card:hover {
+  background: var(--surface1);
+  border-color: var(--mauve);
+}
+
+.zip-folder-icon { font-size: 38px; line-height: 1; }
+
+.zip-folder-name {
+  font-size: 11px;
+  color: var(--text);
+  text-align: center;
+  word-break: break-all;
+  max-height: 3.2em;
+  overflow: hidden;
+  line-height: 1.6;
+}

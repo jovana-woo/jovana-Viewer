@@ -11,6 +11,8 @@ const state = {
   progressKey: ''
 };
 
+const zipBrowseState = { zipPath: null, prefix: null, history: [] };
+
 // ── 진행상황 저장 ─────────────────────────────────────────
 function saveProgress(key, idx) {
   try { localStorage.setItem('pg:' + key, idx); } catch {}
@@ -79,7 +81,8 @@ const pageInfo      = document.getElementById('page-info');
 const tabTitle      = document.getElementById('tab-title');
 
 // ── 탐색기 ────────────────────────────────────────────────
-const explorerState = { path: null, parent: null, currentFile: null, files: [] };
+const explorerState = { path: null, parent: null, currentFile: null, files: [],
+  zipMode: false, zipPath: null, zipPrefix: null };
 
 function toggleSection(id) {
   document.getElementById(id).classList.toggle('collapsed');
@@ -93,7 +96,18 @@ document.getElementById('section-pages-header').addEventListener('click', () => 
 });
 
 document.getElementById('btn-up').addEventListener('click', () => {
-  if (explorerState.parent) browseDir(explorerState.parent);
+  if (explorerState.zipMode) {
+    if (explorerState.zipPrefix) {
+      const parts = explorerState.zipPrefix.split('/');
+      parts.pop();
+      enterZipDir(explorerState.zipPath, parts.join('/'));
+    } else {
+      explorerState.zipMode = false;
+      if (explorerState.path) browseDir(explorerState.path);
+    }
+  } else if (explorerState.parent) {
+    browseDir(explorerState.parent);
+  }
 });
 
 let bulkParsed = [];
@@ -190,6 +204,7 @@ async function browseDir(dirPath) {
   explorerState.path = dirPath;
   explorerState.parent = result.parent;
   explorerState.files = result.files;
+  explorerState.zipMode = false;
   document.getElementById('btn-bulk-rename').style.display = result.files.length ? '' : 'none';
 
   const pathLabel = document.getElementById('explorer-path-label');
@@ -357,7 +372,7 @@ async function loadPath(filePath) {
   explorerState.currentFile = type !== 'folder' ? filePath : null;
   const folder = type === 'folder' ? filePath
     : filePath.substring(0, Math.max(filePath.lastIndexOf('/'), filePath.lastIndexOf('\\')));
-  browseDir(folder);
+  await browseDir(folder);
   if (type === 'zip') {
     await loadZip(filePath);
   } else if (type === 'folder') {
@@ -368,18 +383,125 @@ async function loadPath(filePath) {
 }
 
 async function loadZip(filePath) {
-  const entries = await window.api.readZipList(filePath);
-  if (!entries.length) {
-    alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
-    return;
+  const zipName = filePath.split(/[\\/]/).pop();
+  zipBrowseState.zipPath = filePath;
+  zipBrowseState.prefix = '';
+  zipBrowseState.history = [];
+  state.fileName = zipName;
+  saveRecent(filePath, zipName, 'zip');
+  tabTitle.textContent = zipName;
+  await enterZipDir(filePath, '');
+}
+
+async function enterZipDir(zipPath, prefix) {
+  zipBrowseState.prefix = prefix;
+  const dir = await window.api.readZipDir(zipPath, prefix);
+
+  if (dir.folders.length > 0) {
+    browseZipDir(zipPath, prefix, dir.folders);
   }
-  state.pages = entries.map(e => ({ type: 'zip', zipPath: filePath, entry: e }));
+
+  if (dir.images.length > 0) {
+    const zipName = zipPath.split(/[\\/]/).pop();
+    const folderLabel = prefix ? prefix.split('/').pop() : '';
+    const displayName = folderLabel ? zipName + ' / ' + folderLabel : zipName;
+    await loadZipImages(zipPath, dir.images, displayName);
+  } else if (dir.folders.length > 0) {
+    showZipFolderPicker(zipPath, prefix, dir.folders);
+  } else if (!prefix) {
+    // 루트에서 이미지/폴더 없음 → inner zip 폴백 (readZipList)
+    const entries = await window.api.readZipList(zipPath);
+    if (!entries.length) {
+      alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
+      return;
+    }
+    await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop());
+  } else {
+    alert('이 폴더에 이미지가 없습니다.');
+  }
+}
+
+function showZipFolderPicker(zipPath, prefix, folders) {
+  dropZone.style.display = 'none';
+  pagesContainer.style.display = 'none';
+
+  const picker = document.getElementById('zip-folder-picker');
+  picker.style.display = 'flex';
+  picker.innerHTML = '';
+
+  const zipName = zipPath.split(/[\\/]/).pop();
+
+  const breadcrumb = document.createElement('div');
+  breadcrumb.className = 'zip-breadcrumb';
+
+  if (zipBrowseState.history.length > 0) {
+    const backBtn = document.createElement('button');
+    backBtn.className = 'zip-back-btn';
+    backBtn.textContent = '← 뒤로';
+    backBtn.addEventListener('click', () => {
+      const prev = zipBrowseState.history.pop();
+      enterZipDir(zipPath, prev);
+    });
+    breadcrumb.appendChild(backBtn);
+  }
+
+  const pathLabel = document.createElement('span');
+  pathLabel.className = 'zip-breadcrumb-path';
+  pathLabel.textContent = zipName + (prefix ? ' / ' + prefix : '');
+  breadcrumb.appendChild(pathLabel);
+  picker.appendChild(breadcrumb);
+
+  const grid = document.createElement('div');
+  grid.className = 'zip-folder-grid';
+
+  folders.forEach(folder => {
+    const card = document.createElement('div');
+    card.className = 'zip-folder-card';
+
+    const icon = document.createElement('div');
+    icon.className = 'zip-folder-icon';
+    icon.textContent = '📁';
+
+    const name = document.createElement('div');
+    name.className = 'zip-folder-name';
+    name.textContent = folder;
+    name.title = folder;
+
+    card.appendChild(icon);
+    card.appendChild(name);
+    card.addEventListener('click', () => {
+      const newPrefix = prefix ? prefix + '/' + folder : folder;
+      zipBrowseState.history.push(prefix);
+      enterZipDir(zipPath, newPrefix);
+    });
+    grid.appendChild(card);
+  });
+
+  picker.appendChild(grid);
+  updateUI();
+}
+
+async function loadZipImages(zipPath, entries, displayName) {
+  state.pages = entries.map(e => ({ type: 'zip', zipPath, entry: e }));
   state.rotation = 0;
-  state.progressKey = filePath;
-  state.current = Math.min(loadProgress(filePath), entries.length - 1);
-  state.fileName = filePath.split(/[\\/]/).pop();
-  saveRecent(filePath, state.fileName, 'zip');
+  const progressKey = zipPath + (zipBrowseState.prefix ? '::' + zipBrowseState.prefix : '');
+  state.progressKey = progressKey;
+  state.current = Math.min(loadProgress(progressKey), entries.length - 1);
+  state.fileName = displayName || zipPath.split(/[\\/]/).pop();
   tabTitle.textContent = state.fileName;
+
+  // 사이드바: 상위 레벨 폴더 목록으로 갱신하고 현재 폴더 하이라이트
+  const curPrefix = zipBrowseState.prefix;
+  if (curPrefix) {
+    const slashIdx = curPrefix.lastIndexOf('/');
+    const parentPrefix = slashIdx >= 0 ? curPrefix.slice(0, slashIdx) : '';
+    const currentFolder = curPrefix.slice(slashIdx + 1);
+    const parentDir = await window.api.readZipDir(zipPath, parentPrefix);
+    if (parentDir.folders.length > 0) {
+      browseZipDir(zipPath, parentPrefix, parentDir.folders, currentFolder);
+    }
+  }
+
   buildSidebar();
   await render();
 }
@@ -418,6 +540,48 @@ async function loadImageFile(filePath) {
   await render();
 }
 
+function browseZipDir(zipPath, prefix, folders, activeFolder) {
+  explorerState.zipMode = true;
+  explorerState.zipPath = zipPath;
+  explorerState.zipPrefix = prefix;
+  explorerState.files = [];
+  document.getElementById('btn-bulk-rename').style.display = 'none';
+
+  const zipName = zipPath.split(/[\\/]/).pop();
+  const pathLabel = document.getElementById('explorer-path-label');
+  pathLabel.textContent = prefix ? prefix.split('/').pop() : zipName;
+  pathLabel.title = zipName + (prefix ? ' / ' + prefix : '');
+  document.getElementById('btn-up').disabled = false;
+
+  const list = document.getElementById('explorer-list');
+  list.innerHTML = '';
+
+  folders.forEach(folder => {
+    const item = document.createElement('div');
+    item.className = 'explorer-item explorer-dir';
+    if (folder === activeFolder) item.classList.add('active');
+    const iconEl = document.createElement('span');
+    iconEl.className = 'explorer-icon';
+    iconEl.textContent = '📁';
+    const nameEl = document.createElement('span');
+    nameEl.className = 'explorer-name';
+    nameEl.textContent = folder;
+    item.title = folder;
+    item.appendChild(iconEl);
+    item.appendChild(nameEl);
+    item.addEventListener('click', () => {
+      const newPrefix = prefix ? prefix + '/' + folder : folder;
+      enterZipDir(zipPath, newPrefix);
+      const sec = document.getElementById('section-pages');
+      if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
+    });
+    list.appendChild(item);
+  });
+
+  const activeItem = list.querySelector('.explorer-item.active');
+  if (activeItem) activeItem.scrollIntoView({ block: 'nearest' });
+}
+
 // ── 이미지 로드 ───────────────────────────────────────────
 async function loadPageImage(page) {
   if (!page) return '';
@@ -430,12 +594,15 @@ async function loadPageImage(page) {
 
 // ── 렌더링 ────────────────────────────────────────────────
 async function render() {
+  document.getElementById('zip-folder-picker').style.display = 'none';
   if (!state.pages.length) {
     dropZone.style.display = 'flex';
     pagesContainer.style.display = 'none';
+    viewer.style.cursor = '';
     updateUI();
     return;
   }
+  viewer.style.cursor = 'grab';
 
   dropZone.style.display = 'none';
   pagesContainer.style.display = 'flex';
@@ -473,6 +640,9 @@ function applyTransform() {
   pageLeft.style.transform = rot;
   pageRight.style.transform = rot;
 
+  pagesContainer.style.paddingTop = '';
+  pagesContainer.style.paddingBottom = '';
+
   if (state.fitMode === 'page') {
     const vw = viewer.clientWidth - 40;
     const vh = viewer.clientHeight - 40;
@@ -503,7 +673,9 @@ function applyTransform() {
       pageRight.style.maxHeight = '';
     }
   } else if (state.fitMode === 'height') {
-    const vh = viewer.clientHeight - 40;
+    pagesContainer.style.paddingTop = '0';
+    pagesContainer.style.paddingBottom = '0';
+    const vh = viewer.clientHeight;
     pageLeft.style.width = '';
     pageLeft.style.height = vh + 'px';
     pageLeft.style.maxWidth = '';
@@ -516,6 +688,7 @@ function applyTransform() {
     }
   } else {
     // 수동 줌
+
     pageLeft.style.width = '';
     pageLeft.style.height = '';
     pageLeft.style.maxWidth = 'none';
@@ -738,8 +911,9 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// 클릭으로 페이지 넘기기
+// 클릭으로 페이지 넘기기 (드래그와 구분)
 viewer.addEventListener('click', (e) => {
+  if (panMoved) return;
   if (!state.pages.length) return;
   const vw = viewer.clientWidth;
   if (e.clientX < vw / 2) {
@@ -785,7 +959,7 @@ document.getElementById('btn-fullscreen').addEventListener('click', toggleFullsc
 window.api.onFullscreenChanged((isFull) => {
   document.body.classList.toggle('fullscreen', isFull);
   document.getElementById('btn-fullscreen').classList.toggle('active', isFull);
-  if (state.pages.length) applyTransform();
+  if (!isFull && state.pages.length) applyTransform();
 });
 
 function setFit(mode) {
@@ -883,29 +1057,43 @@ viewer.addEventListener('wheel', (e) => {
   }
 }, { passive: false });
 
-// ── 드래그 앤 드롭 ────────────────────────────────────────
-const overlay = document.createElement('div');
-overlay.id = 'global-drop-overlay';
-overlay.textContent = '파일을 드롭하세요';
-document.body.appendChild(overlay);
+// ── 마우스 드래그 팬(Pan) ─────────────────────────────────
+let panning = false;
+let panStartX = 0, panStartY = 0;
+let panScrollX = 0, panScrollY = 0;
+let panMoved = false;
+const PAN_THRESHOLD = 5;
 
-let dragCounter = 0;
-document.addEventListener('dragover', (e) => { e.preventDefault(); });
-document.addEventListener('dragenter', (e) => {
+viewer.addEventListener('mousedown', (e) => {
+  if (e.button !== 0) return;
+  panning = true;
+  panMoved = false;
+  panStartX = e.clientX;
+  panStartY = e.clientY;
+  panScrollX = viewer.scrollLeft;
+  panScrollY = viewer.scrollTop;
   e.preventDefault();
-  dragCounter++;
-  overlay.classList.add('visible');
 });
-document.addEventListener('dragleave', () => {
-  dragCounter--;
-  if (dragCounter <= 0) { dragCounter = 0; overlay.classList.remove('visible'); }
+
+document.addEventListener('mousemove', (e) => {
+  if (!panning) return;
+  const dx = e.clientX - panStartX;
+  const dy = e.clientY - panStartY;
+  if (!panMoved && (Math.abs(dx) > PAN_THRESHOLD || Math.abs(dy) > PAN_THRESHOLD)) {
+    panMoved = true;
+    viewer.style.cursor = 'grabbing';
+  }
+  if (panMoved) {
+    viewer.scrollLeft = panScrollX - dx;
+    viewer.scrollTop = panScrollY - dy;
+  }
 });
-document.addEventListener('drop', async (e) => {
-  e.preventDefault();
-  dragCounter = 0;
-  overlay.classList.remove('visible');
-  const file = e.dataTransfer.files[0];
-  if (file) await loadPath(file.path);
+
+document.addEventListener('mouseup', () => {
+  if (panning) {
+    panning = false;
+    viewer.style.cursor = state.pages.length ? 'grab' : '';
+  }
 });
 
 // ── 사이드바 수직 리사이즈 (탐색기/페이지 구분) ───────────
@@ -984,7 +1172,7 @@ document.addEventListener('mouseup', () => {
 
 // ── 리사이즈 시 맞춤 재적용 ──────────────────────────────
 window.addEventListener('resize', () => {
-  if (state.pages.length) applyTransform();
+  if (state.pages.length && !document.body.classList.contains('fullscreen')) applyTransform();
 });
 
 // ── 초기화 ────────────────────────────────────────────────

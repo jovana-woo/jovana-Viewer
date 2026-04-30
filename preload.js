@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('api', {
   readFolder: (folderPath) => ipcRenderer.invoke('read-folder', folderPath),
   readImage: (filePath) => ipcRenderer.invoke('read-image', filePath),
   readZipList: (filePath) => ipcRenderer.invoke('read-zip-list', filePath),
+  readZipDir: (filePath, prefix) => ipcRenderer.invoke('read-zip-dir', filePath, prefix),
   readZipImage: (filePath, entryName) => ipcRenderer.invoke('read-zip-image', filePath, entryName),
   getFileType: (filePath) => ipcRenderer.invoke('get-file-type', filePath),
   setActiveRoot: (targetPath) => ipcRenderer.invoke('set-active-root', targetPath),
