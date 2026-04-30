@@ -60,6 +60,43 @@ function loadAutoSwitch() {
   try { return localStorage.getItem('auto-switch-book') === '1'; } catch { return false; }
 }
 
+function saveLastSessionSnapshot() {
+  try {
+    if (!state.sourcePath || !state.pages.length) return;
+    const snapshot = {
+      sourcePath: state.sourcePath,
+      sourceType: state.sourceType,
+      current: state.current,
+      ts: Date.now()
+    };
+    localStorage.setItem('last-session-snapshot', JSON.stringify(snapshot));
+  } catch {}
+}
+
+function loadLastSessionSnapshot() {
+  try {
+    const raw = localStorage.getItem('last-session-snapshot');
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed.sourcePath !== 'string') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function markSessionActive() {
+  try { localStorage.setItem('session-active', '1'); } catch {}
+}
+
+function markSessionClosed() {
+  try { localStorage.setItem('session-active', '0'); } catch {}
+}
+
+function wasPreviousSessionUnclean() {
+  try { return localStorage.getItem('session-active') === '1'; } catch { return false; }
+}
+
 // ── 최근 파일 ─────────────────────────────────────────────
 function saveRecent(path, name, type) {
   try {
@@ -122,8 +159,27 @@ const aboutModal    = document.getElementById('about-modal');
 const settingsModal = document.getElementById('settings-modal');
 const btnRtl        = document.getElementById('btn-rtl');
 const btnNight      = document.getElementById('btn-night');
+const toastLayer    = document.getElementById('toast-layer');
 let cursorHideTimer = null;
 let cursorHiddenByIdle = false;
+let toastTimerSeed = 0;
+
+function showToast(message, type = 'info', duration = 2400) {
+  if (!toastLayer || !message) return;
+  const toast = document.createElement('div');
+  toast.className = `toast toast-${type}`;
+  toast.textContent = message;
+  toastLayer.appendChild(toast);
+  // reflow to ensure transition
+  toast.getBoundingClientRect();
+  toast.classList.add('show');
+  const myId = ++toastTimerSeed;
+  setTimeout(() => {
+    if (myId > toastTimerSeed + 10000) return;
+    toast.classList.remove('show');
+    setTimeout(() => toast.remove(), 180);
+  }, duration);
+}
 
 function showViewerCursor() {
   cursorHiddenByIdle = false;
@@ -259,7 +315,7 @@ async function applyBulkRename() {
     if (!res.success) failed++;
   }
   closeBulkRenameBar();
-  if (failed > 0) alert(`${failed}개 파일 이름 변경 실패`);
+  if (failed > 0) showToast(`${failed}개 파일 이름 변경 실패`, 'error', 3200);
   browseDir(explorerState.path);
 }
 
@@ -335,7 +391,7 @@ async function browseDir(dirPath) {
           if (res.success) {
             browseDir(dirPath);
           } else {
-            alert('이름 변경 실패: ' + res.error);
+            showToast('이름 변경 실패: ' + res.error, 'error', 3200);
             input.replaceWith(nameEl);
           }
         } else {
@@ -362,7 +418,7 @@ async function browseDir(dirPath) {
       if (!confirm(`${label}을(를) 휴지통으로 이동할까요?`)) return;
       const res = await window.api.deleteFile(fullPath);
       if (res.success) browseDir(dirPath);
-      else alert('삭제 실패: ' + res.error);
+      else showToast('삭제 실패: ' + res.error, 'error', 3200);
     });
     wrap.appendChild(delBtn);
 
@@ -527,12 +583,12 @@ async function enterZipDir(zipPath, prefix, options = {}) {
     const entries = await window.api.readZipList(zipPath);
     if (_seq !== undefined && _seq !== loadSeq) return;
     if (!entries.length) {
-      alert('ZIP 파일에서 이미지를 찾을 수 없습니다.\n(CBR/RAR 형식은 지원하지 않습니다)');
+      showToast('ZIP 파일에서 이미지를 찾을 수 없습니다. (CBR/RAR 미지원)', 'warn', 3400);
       return;
     }
     await loadZipImages(zipPath, entries, zipPath.split(/[\\/]/).pop(), { resetProgress, _seq });
   } else {
-    alert('이 폴더에 이미지가 없습니다.');
+    showToast('이 폴더에 이미지가 없습니다.', 'warn', 2600);
   }
 }
 
@@ -623,6 +679,7 @@ async function loadZipImages(zipPath, entries, displayName, options = {}) {
   if (_seq !== undefined && _seq !== loadSeq) return;
   buildSidebar();
   await render();
+  saveLastSessionSnapshot();
 }
 
 async function loadFolder(folderPath, options = {}) {
@@ -641,6 +698,7 @@ async function loadFolder(folderPath, options = {}) {
   tabTitle.textContent = state.fileName;
   buildSidebar();
   await render();
+  saveLastSessionSnapshot();
 }
 
 async function loadImageFile(filePath, options = {}) {
@@ -669,6 +727,7 @@ async function loadImageFile(filePath, options = {}) {
   tabTitle.textContent = state.fileName;
   buildSidebar();
   await render();
+  saveLastSessionSnapshot();
 }
 
 function browseZipDir(zipPath, prefix, folders, activeFolder) {
@@ -801,6 +860,7 @@ async function render() {
   highlightSidebar();
   viewer.scrollTo(0, 0);
   if (state.progressKey) saveProgress(state.progressKey, state.current);
+  saveLastSessionSnapshot();
 }
 
 function applyTransform() {
@@ -1041,7 +1101,7 @@ function buildSidebar() {
         if (state.pages.length > 0) render();
         else { dropZone.style.display = 'flex'; pagesContainer.style.display = 'none'; updateUI(); }
       } else {
-        alert('삭제 실패: ' + result.error);
+        showToast('삭제 실패: ' + result.error, 'error', 3200);
       }
     });
 
@@ -1315,18 +1375,6 @@ viewer.addEventListener('click', (e) => {
   const ratioX = rect.width ? (clickX / rect.width) : 0.5;
   const ratioY = rect.height ? (clickY / rect.height) : 0.5;
 
-  const leftRect = pageLeft.getBoundingClientRect();
-  const rightRect = pageRight.getBoundingClientRect();
-  const inLeft = pageLeft.style.display !== 'none' &&
-    e.clientX >= leftRect.left && e.clientX <= leftRect.right &&
-    e.clientY >= leftRect.top && e.clientY <= leftRect.bottom;
-  const inRight = pageRight.style.display !== 'none' &&
-    e.clientX >= rightRect.left && e.clientX <= rightRect.right &&
-    e.clientY >= rightRect.top && e.clientY <= rightRect.bottom;
-  if (inRight) state.zoomTarget = 'right';
-  else if (inLeft) state.zoomTarget = 'left';
-  else state.zoomTarget = clickX < rect.width / 2 ? 'left' : 'right';
-
   state.fitMode = 'manual';
   const isDouble = state.doubleView && pageRight.style.display !== 'none';
   if (!isDouble) {
@@ -1334,13 +1382,10 @@ viewer.addEventListener('click', (e) => {
     state.zoom = Math.min(Math.max(state.zoom, 1) * 1.35, 5);
     state.zoomLeft = state.zoom;
     state.zoomRight = 1;
-  } else if (state.zoomTarget === 'right') {
-    if (state.zoomRight > 1) return; // 오른쪽 페이지 클릭 확대 1회만
-    state.zoomRight = Math.min(Math.max(state.zoomRight, 1) * 1.35, 5);
-    state.zoom = Math.max(state.zoomLeft, state.zoomRight);
   } else {
-    if (state.zoomLeft > 1) return; // 왼쪽 페이지 클릭 확대 1회만
+    if (state.zoomLeft > 1 || state.zoomRight > 1) return; // 두 장 보기: 클릭 확대 1회만(좌/우 동시)
     state.zoomLeft = Math.min(Math.max(state.zoomLeft, 1) * 1.35, 5);
+    state.zoomRight = Math.min(Math.max(state.zoomRight, 1) * 1.35, 5);
     state.zoom = Math.max(state.zoomLeft, state.zoomRight);
   }
   ['width','height','page'].forEach(m => document.getElementById('btn-fit-' + m).classList.remove('active'));
@@ -1533,12 +1578,13 @@ async function saveRotation() {
     const mime = (ext === 'jpg' || ext === 'jpeg') ? 'image/jpeg' : 'image/png';
     const dataUrl = canvas.toDataURL(mime, 0.95);
     const res = await window.api.saveImage(page.src, dataUrl);
-    if (!res.success) { alert('저장 실패: ' + res.error); return; }
+    if (!res.success) { showToast('저장 실패: ' + res.error, 'error', 3400); return; }
   }
 
   state.rotation = 0;
   await render();
   updateSaveBtn();
+  showToast('회전 저장 완료', 'success', 1800);
 }
 
 async function toggleFullscreen() {
@@ -1689,7 +1735,28 @@ window.addEventListener('resize', () => {
 });
 
 // ── 초기화 ────────────────────────────────────────────────
+const hadUncleanExit = wasPreviousSessionUnclean();
+markSessionActive();
+window.addEventListener('beforeunload', markSessionClosed);
+
 state.rtl = loadReadingDirection();
 syncReadingDirectionUI();
 applyNightMode(loadNightMode());
 buildRecentList();
+
+if (hadUncleanExit) {
+  const last = loadLastSessionSnapshot();
+  if (last && last.sourcePath) {
+    showToast('비정상 종료가 감지되었습니다. 마지막 책 복구를 제안합니다.', 'warn', 3600);
+    setTimeout(async () => {
+      const ok = confirm('이전 종료가 비정상으로 감지되었습니다.\n마지막 보던 책/페이지를 복구할까요?');
+      if (!ok) return;
+      try {
+        await loadPath(last.sourcePath);
+        showToast('마지막 읽기 위치를 복구했습니다.', 'success', 2200);
+      } catch {
+        showToast('복구에 실패했습니다. 최근 파일에서 다시 열어주세요.', 'error', 3200);
+      }
+    }, 120);
+  }
+}
