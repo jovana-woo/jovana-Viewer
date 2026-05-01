@@ -839,12 +839,14 @@ async function render() {
     pageLeft.style.display = 'block';
     pageRight.src = rightSrc;
     pageRight.style.display = 'block';
+    pagesContainer.classList.add('seamless-spread');
   } else {
     const src = await loadPageImage(state.pages[idx]);
     pageLeft.src = src;
     pageLeft.style.display = 'block';
     pageRight.src = '';
     pageRight.style.display = 'none';
+    pagesContainer.classList.remove('seamless-spread');
   }
 
   // 이미지 디코딩 완료 후 한 번 더 맞춤을 적용해 비율/크기 오차를 줄임
@@ -913,7 +915,7 @@ function applyTransform() {
     const vw = viewer.clientWidth - 40;
     const vh = viewer.clientHeight - 40;
     const count = (state.doubleView && state.current + 1 < state.pages.length) ? 2 : 1;
-    const maxW = Math.floor((vw - (count > 1 ? 4 : 0)) / count);
+    const maxW = Math.floor(vw / count);
     fitImageToBounds(pageLeft, maxW, vh);
     if (pageRight.style.display !== 'none') {
       fitImageToBounds(pageRight, maxW, vh);
@@ -921,7 +923,7 @@ function applyTransform() {
   } else if (state.fitMode === 'width') {
     const vw = viewer.clientWidth - 40;
     const count = (state.doubleView && state.current + 1 < state.pages.length) ? 2 : 1;
-    const w = Math.floor((vw - (count > 1 ? 4 : 0)) / count);
+    const w = Math.floor(vw / count);
     pageLeft.style.width = w + 'px';
     pageLeft.style.height = '';
     pageLeft.style.maxWidth = '';
@@ -953,7 +955,7 @@ function applyTransform() {
     const vw = viewer.clientWidth - 40;
     const vh = viewer.clientHeight - 40;
     const count = isDouble ? 2 : 1;
-    const maxW = Math.floor((vw - (count > 1 ? 4 : 0)) / count);
+    const maxW = Math.floor(vw / count);
 
     // 두 장 보기에서는 기본 fit 크기를 유지하고 좌/우를 독립 확대
     const leftBase = getFitSize(pageLeft, maxW, vh);

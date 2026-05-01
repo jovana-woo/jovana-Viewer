@@ -140,6 +140,10 @@ body {
   transition: opacity 0.15s;
 }
 .section-header:hover .section-actions { opacity: 1; }
+.section-actions-placeholder {
+  opacity: 0 !important;
+  pointer-events: none;
+}
 
 .section-body {
   flex: 1;
@@ -655,6 +659,16 @@ body {
   justify-content: center;
   gap: 4px;
   padding: 16px;
+}
+
+/* 두 장 보기에서 실제 책처럼 중앙 경계(인공 gap/그림자) 제거 */
+#pages-container.seamless-spread {
+  gap: 0;
+}
+
+#pages-container.seamless-spread .page-img {
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .page-img {
