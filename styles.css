@@ -668,7 +668,7 @@ body {
 
 /* 앱 내 야간 모드: 윈도우 야간 모드처럼 웜(노란) 톤 */
 body.night-mode .page-img {
-  filter: sepia(0.58) saturate(1.22) hue-rotate(-24deg) brightness(0.84) contrast(0.95);
+  filter: sepia(0.52) saturate(1.02) hue-rotate(-24deg) brightness(0.90) contrast(0.82);
 }
 
 /* 상태바 */

@@ -1188,6 +1188,16 @@ function goPrev() {
   }
 }
 
+// 두 장 보기 정렬 보정용: 한 장씩만 이동 (예: 45 -> 34)
+function nudgeSpread(delta) {
+  if (!state.doubleView || state.autoSwitchingBook || !state.pages.length) return;
+  const next = Math.max(0, Math.min(state.current + delta, state.pages.length - 1));
+  if (next === state.current) return;
+  resetTransientZoom();
+  state.current = next;
+  render();
+}
+
 document.getElementById('btn-next').addEventListener('click', goNext);
 document.getElementById('btn-prev').addEventListener('click', goPrev);
 
@@ -1364,6 +1374,33 @@ document.addEventListener('keydown', (e) => {
   if (aboutModal && aboutModal.style.display !== 'none') {
     if (e.key === 'Escape') aboutModal.style.display = 'none';
     return;
+  }
+  if (state.doubleView && !e.ctrlKey && !e.altKey && !e.metaKey && e.shiftKey) {
+    if (e.key === 'ArrowLeft') {
+      e.preventDefault();
+      nudgeSpread(-1);
+      return;
+    }
+    if (e.key === 'ArrowRight') {
+      e.preventDefault();
+      nudgeSpread(1);
+      return;
+    }
+  }
+  if (!e.ctrlKey && !e.altKey && !e.metaKey && (e.key === 'a' || e.key === 'A' || e.key === 'd' || e.key === 'D')) {
+    e.preventDefault();
+    if (!state.doubleView) {
+      showToast('A/D 정렬 보정은 두 장 보기에서만 동작합니다.', 'info', 1600);
+      return;
+    }
+    if (e.key === 'a' || e.key === 'A') {
+      nudgeSpread(-1);
+      return;
+    }
+    if (e.key === 'd' || e.key === 'D') {
+      nudgeSpread(1);
+      return;
+    }
   }
   if (e.key === 'ArrowRight' || e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === ' ') {
     e.preventDefault(); goNext();
