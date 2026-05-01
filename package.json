@@ -32,12 +32,17 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true
+      "createStartMenuShortcut": true,
+      "installerIcon": "assets/icon.ico",
+      "uninstallerIcon": "assets/icon.ico"
     },
     "files": [
       "**/*",
       "!dist/**",
       "!node_modules/.cache/**"
+    ],
+    "asarUnpack": [
+      "zip-reader-worker.js"
     ]
   },
   "devDependencies": {

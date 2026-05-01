@@ -631,7 +631,8 @@ function showZipFolderPicker(zipPath, prefix, folders) {
 
     const icon = document.createElement('div');
     icon.className = 'zip-folder-icon';
-    icon.textContent = '📁';
+    const low = folder.toLowerCase();
+    icon.textContent = low.endsWith('.zip') || low.endsWith('.cbz') ? '🗜' : '📁';
 
     const name = document.createElement('div');
     name.className = 'zip-folder-name';
@@ -677,7 +678,7 @@ async function loadZipImages(zipPath, entries, displayName, options = {}) {
   }
 
   if (_seq !== undefined && _seq !== loadSeq) return;
-  buildSidebar();
+  await buildSidebar();
   await render();
   saveLastSessionSnapshot();
 }
@@ -696,7 +697,7 @@ async function loadFolder(folderPath, options = {}) {
   state.sourceType = 'folder';
   saveRecent(folderPath, state.fileName, 'folder');
   tabTitle.textContent = state.fileName;
-  buildSidebar();
+  await buildSidebar();
   await render();
   saveLastSessionSnapshot();
 }
@@ -725,7 +726,7 @@ async function loadImageFile(filePath, options = {}) {
   state.sourceType = 'image';
   saveRecent(filePath, state.fileName, 'image');
   tabTitle.textContent = state.fileName;
-  buildSidebar();
+  await buildSidebar();
   await render();
   saveLastSessionSnapshot();
 }
@@ -762,7 +763,8 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
     if (folder === activeFolder) item.classList.add('active');
     const iconEl = document.createElement('span');
     iconEl.className = 'explorer-icon';
-    iconEl.textContent = '📁';
+    const low = folder.toLowerCase();
+    iconEl.textContent = low.endsWith('.zip') || low.endsWith('.cbz') ? '🗜' : '📁';
     const nameEl = document.createElement('span');
     nameEl.className = 'explorer-name';
     nameEl.textContent = folder;
@@ -980,6 +982,15 @@ function applyTransform() {
   }
 }
 
+function getStatusContentLabel() {
+  return state.fileName || '파일 없음';
+}
+
+function getStatusContentTitle() {
+  if (state.sourcePath) return state.sourcePath;
+  return '';
+}
+
 function updateUI() {
   const total = state.pages.length;
   const cur = state.current + 1;
@@ -988,7 +999,9 @@ function updateUI() {
 
   pageCounter.textContent = label;
   statusPages.textContent = label;
-  statusFile.textContent = state.fileName || '파일 없음';
+  statusFile.textContent = getStatusContentLabel();
+  statusFile.title = getStatusContentTitle();
+  tabTitle.title = getStatusContentTitle() || tabTitle.textContent;
   statusMode.textContent = state.doubleView ? '두 장 보기' : '한 장 보기';
   statusZoom.textContent = state.fitMode !== 'manual'
     ? state.fitMode === 'page' ? '맞춤' : state.fitMode === 'width' ? '너비' : '높이'
@@ -1017,6 +1030,9 @@ function resetTransientZoom() {
 
 // ── 사이드바 썸네일 ───────────────────────────────────────
 let thumbObserver = null;
+/** 이 개수 초과 시 썸네일 미리보기 생략(수천 페이지 시 렉·메모리 방지) */
+const SIDEBAR_THUMB_MAX_PAGES = 400;
+const SIDEBAR_DOM_CHUNK = 72;
 
 async function makeThumbnail(src) {
   return new Promise(resolve => {
@@ -1038,42 +1054,54 @@ async function makeThumbnail(src) {
   });
 }
 
-function buildSidebar() {
-  if (thumbObserver) thumbObserver.disconnect();
-  thumbObserver = new IntersectionObserver(async (entries) => {
-    for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      const thumb = entry.target;
-      const idx = parseInt(thumb.dataset.idx);
-      const page = state.pages[idx];
-      if (!page) continue;
-      // 안정성 우선: zip/cbz는 썸네일 디코딩을 생략하여 과부하/크래시를 방지
-      if (page.type === 'zip') {
+async function buildSidebar() {
+  if (thumbObserver) {
+    thumbObserver.disconnect();
+    thumbObserver = null;
+  }
+  const skipSideThumbs = state.pages.length > SIDEBAR_THUMB_MAX_PAGES;
+  if (!skipSideThumbs) {
+    thumbObserver = new IntersectionObserver(async (entries) => {
+      for (const entry of entries) {
+        if (!entry.isIntersecting) continue;
+        const thumb = entry.target;
+        const idx = parseInt(thumb.dataset.idx, 10);
+        const page = state.pages[idx];
+        if (!page) continue;
+        if (page.type === 'zip') {
+          thumbObserver.unobserve(thumb);
+          thumb.removeAttribute('src');
+          thumb.style.background = 'var(--surface1)';
+          continue;
+        }
         thumbObserver.unobserve(thumb);
-        thumb.removeAttribute('src');
-        thumb.style.background = 'var(--surface1)';
-        continue;
+        const raw = await loadPageImage(page);
+        if (raw) thumb.src = await makeThumbnail(raw);
       }
-      thumbObserver.unobserve(thumb);
-      const raw = await loadPageImage(page);
-      if (raw) thumb.src = await makeThumbnail(raw);
-    }
-  }, { root: fileList, rootMargin: '120px' });
+    }, { root: fileList, rootMargin: '120px' });
+  }
 
   fileList.innerHTML = '';
-  state.pages.forEach((page, i) => {
+  for (let i = 0; i < state.pages.length; i++) {
+    const page = state.pages[i];
     const item = document.createElement('div');
     item.className = 'file-item';
-    item.dataset.idx = i;
+    item.dataset.idx = String(i);
 
     const num = document.createElement('span');
     num.className = 'page-num';
-    num.textContent = i + 1;
+    num.textContent = String(i + 1);
 
     const thumb = document.createElement('img');
     thumb.className = 'thumb';
-    thumb.dataset.idx = i;
-    thumbObserver.observe(thumb);
+    thumb.dataset.idx = String(i);
+    if (page.type === 'zip' || skipSideThumbs) {
+      thumb.removeAttribute('src');
+      thumb.style.background = 'var(--surface1)';
+      thumb.style.minHeight = '36px';
+    } else {
+      thumbObserver.observe(thumb);
+    }
 
     const name = document.createElement('span');
     name.style.cssText = 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1';
@@ -1095,10 +1123,11 @@ function buildSidebar() {
       if (!confirm(`"${fileName}" 을 휴지통으로 이동하시겠습니까?`)) return;
       const result = await window.api.deleteFile(page.src);
       if (result.success) {
-        state.pages.splice(i, 1);
+        const delIdx = state.pages.indexOf(page);
+        if (delIdx >= 0) state.pages.splice(delIdx, 1);
         if (state.current >= state.pages.length) state.current = Math.max(0, state.pages.length - 1);
-        buildSidebar();
-        if (state.pages.length > 0) render();
+        await buildSidebar();
+        if (state.pages.length > 0) await render();
         else { dropZone.style.display = 'flex'; pagesContainer.style.display = 'none'; updateUI(); }
       } else {
         showToast('삭제 실패: ' + result.error, 'error', 3200);
@@ -1115,7 +1144,11 @@ function buildSidebar() {
       render();
     });
     fileList.appendChild(item);
-  });
+
+    if (i > 0 && (i + 1) % SIDEBAR_DOM_CHUNK === 0) {
+      await new Promise(r => requestAnimationFrame(r));
+    }
+  }
 }
 
 function highlightSidebar() {

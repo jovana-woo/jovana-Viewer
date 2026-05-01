@@ -1,21 +1,20 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const { pathToFileURL } = require('url');
+const { Worker } = require('worker_threads');
 
 let mainWindow;
 
 const LIMITS = {
   MAX_IMAGE_BYTES: 200 * 1024 * 1024,     // 200MB per image
+  MAX_NESTED_ZIP_BYTES: 512 * 1024 * 1024, // 권.zip 통째 읽기 상한
   MAX_DATA_URL_LENGTH: 300 * 1024 * 1024, // 300MB (base64 string)
   MAX_ZIP_ENTRIES: 50000
 };
 
-// outer zip: yauzl 기반 (파일 전체를 메모리에 올리지 않음 → 크기 제한 없음)
-const outerZipCache = new Map(); // filePath → { zipfile, entryMap: Map<name, entry> }
 const innerZipCache = new Map(); // 'outerPath::innerName' → JSZip
-const outerZipOpenJobs = new Map(); // filePath → Promise
 let zipOpQueue = Promise.resolve();
-const MAX_OUTER_ZIP_CACHE = 2;
 const allowedRoots = [];
 const MAX_ALLOWED_ROOTS = 8;
 
@@ -25,89 +24,121 @@ function runZipOp(task) {
   return next;
 }
 
-function decodeZipName(buf) {
-  if (typeof buf === 'string') return buf;
+function zipCacheKey(filePath) {
+  if (typeof filePath !== 'string' || !filePath.trim()) return filePath;
   try {
-    return new TextDecoder('utf-8', { fatal: true }).decode(buf);
+    return path.resolve(filePath);
   } catch {
-    return new TextDecoder('euc-kr').decode(buf);
+    return filePath;
   }
 }
 
-async function getOuterZip(filePath) {
-  if (outerZipCache.has(filePath)) return outerZipCache.get(filePath);
-  if (outerZipOpenJobs.has(filePath)) return outerZipOpenJobs.get(filePath);
+/** yauzl CD/스트림은 Worker 전용 — 메인 프로세스 힙 분리 */
+let zipWorker = null;
+let zipWorkerMsgId = 0;
+const zipWorkerPending = new Map();
+let workerZipKey = null;
+let workerZipNames = [];
 
-  const openJob = (async () => {
-  console.log('[YAUZL] 열기 시작:', path.basename(filePath));
-  const { zipfile, entryMap } = await new Promise((resolve, reject) => {
-    const yauzl = require('yauzl');
-    const timer = setTimeout(() => reject(new Error('Zip open timed out (60s)')), 60000);
-    yauzl.open(filePath, { lazyEntries: true, autoClose: false, decodeStrings: false }, (err, zf) => {
-      if (err) { clearTimeout(timer); return reject(err); }
-      console.log('[YAUZL] 파일 열림, 엔트리 스캔 중...');
-      const map = new Map();
-      zf.readEntry();
-      zf.on('entry', entry => {
-        const name = decodeZipName(entry.fileName);
-        if (!name.endsWith('/') && !name.endsWith('\\')) {
-          entry._name = name;
-          map.set(name, entry);
-        }
-        zf.readEntry();
-      });
-      zf.on('end', () => { clearTimeout(timer); console.log('[YAUZL] 완료, 엔트리 수:', map.size); resolve({ zipfile: zf, entryMap: map }); });
-      zf.on('error', e => { clearTimeout(timer); reject(e); });
-    });
+function spawnZipWorker() {
+  if (zipWorker) return zipWorker;
+  const wpath = path.join(__dirname, 'zip-reader-worker.js');
+  zipWorker = new Worker(wpath);
+  zipWorker.on('message', msg => {
+    const { id } = msg;
+    const p = zipWorkerPending.get(id);
+    if (!p) return;
+    zipWorkerPending.delete(id);
+    if (msg.ok) p.resolve(msg);
+    else p.reject(new Error(msg.error || 'zip worker'));
   });
-  if (entryMap.size > LIMITS.MAX_ZIP_ENTRIES) {
-    zipfile.close();
-    throw new Error('Zip has too many entries');
+  zipWorker.on('error', err => {
+    for (const [, pr] of zipWorkerPending) pr.reject(err);
+    zipWorkerPending.clear();
+    try {
+      zipWorker.terminate();
+    } catch {}
+    zipWorker = null;
+    workerZipKey = null;
+    workerZipNames = [];
+  });
+  return zipWorker;
+}
+
+function zipWorkerSend(payload) {
+  return new Promise((resolve, reject) => {
+    const id = ++zipWorkerMsgId;
+    zipWorkerPending.set(id, { resolve, reject });
+    spawnZipWorker().postMessage({ id, ...payload });
+  });
+}
+
+async function zipWorkerForceClose() {
+  if (!zipWorker) {
+    workerZipKey = null;
+    workerZipNames = [];
+    return;
   }
-  // 안정성 우선: 자동 전환 중에는 zipfile을 강제 close하지 않음
-  // (진행 중 read stream과 충돌 시 네이티브 크래시 가능)
-  const cached = { zipfile, entryMap };
-  outerZipCache.set(filePath, cached);
-  while (outerZipCache.size > MAX_OUTER_ZIP_CACHE) {
-    const oldKey = outerZipCache.keys().next().value;
-    if (oldKey === filePath) break;
-    const old = outerZipCache.get(oldKey);
-    try { old.zipfile.close(); } catch {}
-    outerZipCache.delete(oldKey);
-    for (const k of [...innerZipCache.keys()]) {
-      if (k.startsWith(oldKey + '::')) innerZipCache.delete(k);
+  try {
+    await zipWorkerSend({ op: 'close' });
+  } catch {}
+  workerZipKey = null;
+  workerZipNames = [];
+}
+
+async function zipWorkerEnsureOpen(absPath) {
+  const key = zipCacheKey(absPath);
+  if (workerZipKey === key && workerZipNames.length) return;
+  try {
+    const res = await zipWorkerSend({ op: 'open', path: key });
+    workerZipKey = key;
+    workerZipNames = Array.isArray(res.names) ? res.names : [];
+  } catch (e) {
+    workerZipKey = null;
+    workerZipNames = [];
+    throw e;
+  }
+}
+
+async function zipWorkerReadBuffer(absPath, entryName, maxBytes) {
+  const key = zipCacheKey(absPath);
+  if (workerZipKey !== key) await zipWorkerEnsureOpen(absPath);
+  const res = await zipWorkerSend({ op: 'read', name: entryName, maxBytes });
+  return Buffer.from(res.buffer);
+}
+
+/** inner zip(JSZip) 안에서 한 단계 폴더·이미지 목록 — read-zip-image용 `innerEntry::path` 키 */
+async function listInnerZipOneLevel(outerPath, innerZipEntry, innerRelPrefix, imgExts) {
+  const inner = await getInnerZip(outerPath, innerZipEntry);
+  const pfx = innerRelPrefix ? (innerRelPrefix.endsWith('/') ? innerRelPrefix : innerRelPrefix + '/') : '';
+  const folders = new Set();
+  const images = [];
+  const innerPre = innerZipEntry + '::';
+  for (const n of Object.keys(inner.files)) {
+    const f = inner.files[n];
+    if (f.dir) continue;
+    const norm = n.replace(/\\/g, '/');
+    if (pfx && !norm.startsWith(pfx)) continue;
+    const after = pfx ? norm.slice(pfx.length) : norm;
+    if (!after) continue;
+    const si = after.indexOf('/');
+    if (si === -1) {
+      if (imgExts.includes(path.extname(after).toLowerCase())) images.push(innerPre + norm);
+    } else {
+      folders.add(after.slice(0, si));
     }
   }
-  return cached;
-  })();
-
-  outerZipOpenJobs.set(filePath, openJob);
-  try {
-    return await openJob;
-  } finally {
-    outerZipOpenJobs.delete(filePath);
-  }
-}
-
-function readYauzlEntry(zipfile, entry) {
-  return new Promise((resolve, reject) => {
-    zipfile.openReadStream(entry, (err, stream) => {
-      if (err) return reject(err);
-      const chunks = [];
-      stream.on('data', c => chunks.push(c));
-      stream.on('end', () => resolve(Buffer.concat(chunks)));
-      stream.on('error', reject);
-    });
-  });
+  const sortNum = (a, b) => a.localeCompare(b, undefined, { numeric: true });
+  return {
+    folders: [...folders].sort(sortNum),
+    images: images.sort(sortNum)
+  };
 }
 
 async function getInnerZip(outerPath, innerName) {
-  const key = outerPath + '::' + innerName;
+  const key = zipCacheKey(outerPath) + '::' + innerName;
   if (!innerZipCache.has(key)) {
-    const { zipfile, entryMap } = await getOuterZip(outerPath);
-    const entry = entryMap.get(innerName);
-    if (!entry) throw new Error('Inner zip entry not found');
-    const data = await readYauzlEntry(zipfile, entry);
+    const data = await zipWorkerReadBuffer(outerPath, innerName, LIMITS.MAX_NESTED_ZIP_BYTES);
     const JSZip = require('jszip');
     const decodeFileName = bytes => {
       try { return new TextDecoder('utf-8', { fatal: true }).decode(bytes); }
@@ -118,7 +149,7 @@ async function getInnerZip(outerPath, innerName) {
       throw new Error('Inner zip has too many entries');
     }
     innerZipCache.set(key, inner);
-    if (innerZipCache.size > 2) innerZipCache.delete(innerZipCache.keys().next().value);
+    if (innerZipCache.size > 1) innerZipCache.delete(innerZipCache.keys().next().value);
   }
   return innerZipCache.get(key);
 }
@@ -172,6 +203,50 @@ function isWithinAllowedRoots(targetPath) {
   });
 }
 
+async function collectImagePathsRecursive(folderPath, maxFiles) {
+  const exts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']);
+  const rootResolved = path.resolve(folderPath);
+  const sep = rootResolved.endsWith(path.sep) ? rootResolved : rootResolved + path.sep;
+  const out = [];
+  const stack = [folderPath];
+  let tick = 0;
+  while (stack.length && out.length < maxFiles) {
+    const dir = stack.pop();
+    let entries;
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (out.length >= maxFiles) break;
+      const full = path.join(dir, ent.name);
+      if (ent.isDirectory()) {
+        if (ent.name.startsWith('.')) continue;
+        let r;
+        try {
+          r = path.resolve(full);
+        } catch {
+          continue;
+        }
+        if (r !== rootResolved && !r.startsWith(sep)) continue;
+        stack.push(full);
+      } else if (ent.isFile()) {
+        const ext = path.extname(ent.name).toLowerCase();
+        if (exts.has(ext)) out.push(full);
+      }
+    }
+    tick++;
+    if (tick % 64 === 0) await new Promise(r => setImmediate(r));
+  }
+  out.sort((a, b) => {
+    const ra = path.relative(rootResolved, a) || path.basename(a);
+    const rb = path.relative(rootResolved, b) || path.basename(b);
+    return ra.localeCompare(rb, undefined, { numeric: true });
+  });
+  return out;
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1400,
@@ -203,6 +278,18 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
+});
+
+app.on('before-quit', () => {
+  try {
+    if (zipWorker) {
+      try {
+        zipWorker.terminate();
+      } catch {}
+      zipWorker = null;
+    }
+    innerZipCache.clear();
+  } catch {}
 });
 
 // 파일/폴더 열기 다이얼로그
@@ -239,11 +326,22 @@ ipcMain.handle('set-active-root', async (_, targetPath) => {
   }
 });
 
-// 폴더 내 이미지 목록 읽기
-ipcMain.handle('read-folder', async (_, folderPath) => {
+// 폴더 내 이미지 목록 읽기 (options.recursiveImages: 압축 풀린 트리 전체)
+ipcMain.handle('read-folder', async (_, folderPath, options = {}) => {
   const exts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
   try {
-    const files = fs.readdirSync(folderPath)
+    if (!isSafePathInput(folderPath)) return [];
+    const st = safeStat(folderPath);
+    if (!st || !st.isDirectory()) return [];
+    const maxList = Math.min(
+      Number(options.maxFiles) > 0 ? Number(options.maxFiles) : LIMITS.MAX_ZIP_ENTRIES,
+      LIMITS.MAX_ZIP_ENTRIES
+    );
+    if (options && options.recursiveImages) {
+      return collectImagePathsRecursive(folderPath, maxList);
+    }
+    const files = fs
+      .readdirSync(folderPath)
       .filter(f => exts.includes(path.extname(f).toLowerCase()))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
       .map(f => path.join(folderPath, f));
@@ -281,14 +379,19 @@ ipcMain.handle('inspect-folder', async (_, folderPath) => {
   }
 });
 
-// 이미지 파일을 base64로 읽기
+// 이미지 파일 읽기 (작은 파일은 data URL, 큰 파일은 file:// 로 렌더러 부담 감소)
+const READ_IMAGE_DATA_URL_MAX = 1.5 * 1024 * 1024;
 ipcMain.handle('read-image', async (_, filePath) => {
   try {
     if (!isSafePathInput(filePath)) return null;
-    const st = safeStat(filePath);
+    const abs = path.resolve(filePath);
+    const st = safeStat(abs);
     if (!st || !st.isFile() || st.size > LIMITS.MAX_IMAGE_BYTES) return null;
-    const data = fs.readFileSync(filePath);
-    const ext = path.extname(filePath).toLowerCase().replace('.', '');
+    if (st.size > READ_IMAGE_DATA_URL_MAX) {
+      return pathToFileURL(abs).href;
+    }
+    const data = fs.readFileSync(abs);
+    const ext = path.extname(abs).toLowerCase().replace('.', '');
     const mime = ext === 'jpg' || ext === 'jpeg' ? 'jpeg' : ext;
     return `data:image/${mime};base64,${data.toString('base64')}`;
   } catch {
@@ -303,8 +406,8 @@ ipcMain.handle('read-zip-list', async (_, filePath) => {
   return runZipOp(async () => {
   try {
     if (!isSafePathInput(filePath)) return [];
-    const { entryMap } = await getOuterZip(filePath);
-    const allNames = [...entryMap.keys()];
+    await zipWorkerEnsureOpen(filePath);
+    const allNames = workerZipNames;
 
     // 1) 이미지 파일 찾기 (깊이 무관)
     const images = allNames
@@ -317,7 +420,7 @@ ipcMain.handle('read-zip-list', async (_, filePath) => {
       .filter(n => zipExts.includes(path.extname(n).toLowerCase()))
       .sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
     const result = [];
-    for (const innerName of innerZips) {
+    for (const innerName of innerZips.slice(0, 3)) {
       try {
         const inner = await getInnerZip(filePath, innerName);
         const imgs = Object.keys(inner.files)
@@ -350,11 +453,13 @@ ipcMain.handle('read-zip-image', async (_, filePath, entryName) => {
       imgData = await file.async('base64');
       entryForExt = innerEntry;
     } else {
-      const { zipfile, entryMap } = await getOuterZip(filePath);
-      const entry = entryMap.get(entryName);
-      if (!entry) return null;
-      if (entry.uncompressedSize > LIMITS.MAX_IMAGE_BYTES) return null;
-      const buf = await readYauzlEntry(zipfile, entry);
+      await zipWorkerEnsureOpen(filePath);
+      let buf;
+      try {
+        buf = await zipWorkerReadBuffer(filePath, entryName, LIMITS.MAX_IMAGE_BYTES);
+      } catch {
+        return null;
+      }
       imgData = buf.toString('base64');
       entryForExt = entryName;
     }
@@ -389,13 +494,11 @@ ipcMain.handle('delete-file', async (_, filePath) => {
   try {
     if (!isSafePathInput(filePath)) return { success: false, error: 'Invalid path' };
     if (!isWithinAllowedRoots(filePath)) return { success: false, error: 'Path is outside allowed root' };
+    const zkey = zipCacheKey(filePath);
+    if (workerZipKey === zkey) await zipWorkerForceClose();
     await shell.trashItem(filePath);
-    if (outerZipCache.has(filePath)) {
-      try { outerZipCache.get(filePath).zipfile.close(); } catch {}
-      outerZipCache.delete(filePath);
-    }
     for (const k of [...innerZipCache.keys()]) {
-      if (k.startsWith(filePath + '::')) innerZipCache.delete(k);
+      if (k.startsWith(zkey + '::')) innerZipCache.delete(k);
     }
     return { success: true };
   } catch (e) {
@@ -411,13 +514,11 @@ ipcMain.handle('rename-file', async (_, oldPath, newName) => {
     if (!isWithinAllowedRoots(oldPath)) return { success: false, error: 'Path is outside allowed root' };
     const dir = path.dirname(oldPath);
     const newPath = path.join(dir, newName.trim());
+    const zkey = zipCacheKey(oldPath);
+    if (workerZipKey === zkey) await zipWorkerForceClose();
     fs.renameSync(oldPath, newPath);
-    if (outerZipCache.has(oldPath)) {
-      try { outerZipCache.get(oldPath).zipfile.close(); } catch {}
-      outerZipCache.delete(oldPath);
-    }
     for (const k of [...innerZipCache.keys()]) {
-      if (k.startsWith(oldPath + '::')) innerZipCache.delete(k);
+      if (k.startsWith(zkey + '::')) innerZipCache.delete(k);
     }
     return { success: true, newPath };
   } catch (e) {
@@ -463,23 +564,44 @@ ipcMain.handle('save-image', async (_, filePath, dataUrl) => {
   }
 });
 
-// zip 내부 디렉토리 탐색 (한 레벨씩)
+// zip 내부 디렉토리 탐색 (한 레벨씩; 내부 .zip/.cbz는 가상 폴더로 진입 시 JSZip으로 나열)
 ipcMain.handle('read-zip-dir', async (_, filePath, prefix) => {
   const imgExts = ['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp'];
+  const zipExts = ['.zip', '.cbz'];
   return runZipOp(async () => {
   try {
     if (!isSafePathInput(filePath)) return { folders: [], images: [] };
-    const { entryMap } = await getOuterZip(filePath);
-    const pfx = prefix ? (prefix.endsWith('/') ? prefix : prefix + '/') : '';
+    await zipWorkerEnsureOpen(filePath);
+    const names = workerZipNames;
+    const pfxRaw = typeof prefix === 'string' ? prefix.replace(/\\/g, '/') : '';
+
+    const zipEntries = names
+      .filter(n => zipExts.includes(path.extname(n).toLowerCase()))
+      .sort((a, b) => b.length - a.length);
+
+    for (const ze of zipEntries) {
+      if (pfxRaw === ze) {
+        return await listInnerZipOneLevel(filePath, ze, '', imgExts);
+      }
+      if (pfxRaw.startsWith(ze + '/')) {
+        const innerRel = pfxRaw.slice(ze.length + 1);
+        return await listInnerZipOneLevel(filePath, ze, innerRel, imgExts);
+      }
+    }
+
+    const pfx = pfxRaw ? (pfxRaw.endsWith('/') ? pfxRaw : pfxRaw + '/') : '';
     const folders = new Set();
     const images = [];
-    for (const name of entryMap.keys()) {
+    const zipExtSet = new Set(zipExts);
+    for (const name of names) {
       if (!name.startsWith(pfx)) continue;
       const rel = name.slice(pfx.length);
       if (!rel) continue;
       const slashIdx = rel.indexOf('/');
       if (slashIdx === -1) {
-        if (imgExts.includes(path.extname(rel).toLowerCase())) images.push(name);
+        const ext = path.extname(rel).toLowerCase();
+        if (imgExts.includes(ext)) images.push(name);
+        else if (zipExtSet.has(ext)) folders.add(rel);
       } else {
         folders.add(rel.slice(0, slashIdx));
       }
