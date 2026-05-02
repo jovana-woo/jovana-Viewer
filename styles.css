@@ -704,9 +704,19 @@ body {
   transition: filter 0.16s ease;
 }
 
-/* 앱 내 야간 모드: 웜톤은 sepia·채도 위주(hue 과회전 시 보라색 번짐 방지) */
+/*
+ * 앱 내 야간 모드: 만화 페이지(.page-img)만 필터 적용
+ * 목표: 오래된 만화책(누런 종이) 톤 + 눈부심 줄이기
+ * sepia는 최대(1)라 더 진한 노랑만으로는 한계 → 밝기·대비·채도로 “진하게” 조절
+ * 주의: hue-rotate를 크게 주면 보라색으로 번질 수 있음 → 작은 각도만 사용
+ */
 body.night-mode .page-img {
-  filter: sepia(0.98) saturate(1.14) hue-rotate(-32deg) brightness(0.76) contrast(0.82);
+  filter:
+    sepia(1)           /* 0~1, 1=세피아 최대(여기서 더 올릴 수 없음) */
+    saturate(0.82)     /* 너무 높이면 형광 느낌. 살짝 올려 탁한 느낌만 줄임 */
+    hue-rotate(-28deg) /* 색상환 살짝 돌림(웜 보정). 음수 과다 시 보라 쪽으로 밀림 */
+    brightness(0.65)   /* 낮출수록 톤이 진해짐(연한 느낌 완화). 과하면 너무 어두움 */
+    contrast(0.84);   /* 1 미만이어도 이전보다 올리면 선·톤이 덜 빠지고 진하게 보임 */
 }
 
 /* 상태바 */
