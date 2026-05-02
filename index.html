@@ -29,8 +29,10 @@
       </div>
       <div class="section-body" id="explorer-body">
         <div id="explorer-path-bar">
-          <button type="button" class="icon-btn explorer-up-btn" id="btn-up" title="상위 폴더">↑</button>
-          <span id="explorer-path-label" title="">—</span>
+          <div id="explorer-path-up-hit" class="explorer-path-up-hit is-disabled" title="">
+            <button type="button" class="icon-btn explorer-up-btn" id="btn-up" disabled title="상위 폴더">↑</button>
+            <span id="explorer-path-label" title="">—</span>
+          </div>
           <button class="icon-btn" id="btn-bulk-rename" title="파일 일괄 이름 변경" style="display:none">✏</button>
         </div>
         <div id="explorer-search-wrap">

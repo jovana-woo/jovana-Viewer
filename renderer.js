@@ -230,7 +230,17 @@ document.getElementById('section-pages-header').addEventListener('click', () => 
   toggleSection('section-pages');
 });
 
-document.getElementById('btn-up').addEventListener('click', () => {
+function syncExplorerUpHitState() {
+  const btnUp = document.getElementById('btn-up');
+  const hit = document.getElementById('explorer-path-up-hit');
+  if (!btnUp || !hit) return;
+  hit.classList.toggle('is-disabled', btnUp.disabled);
+  hit.title = btnUp.disabled ? '' : '상위 폴더로 이동';
+}
+
+function goExplorerParent() {
+  const btnUp = document.getElementById('btn-up');
+  if (!btnUp || btnUp.disabled) return;
   if (explorerState.zipMode) {
     if (explorerState.zipPrefix) {
       const parts = explorerState.zipPrefix.split('/');
@@ -243,7 +253,9 @@ document.getElementById('btn-up').addEventListener('click', () => {
   } else if (explorerState.parent) {
     browseDir(explorerState.parent);
   }
-});
+}
+
+document.getElementById('explorer-path-up-hit').addEventListener('click', goExplorerParent);
 
 let bulkParsed = [];
 
@@ -349,6 +361,7 @@ async function browseDir(dirPath) {
   pathLabel.textContent = folderName;
   pathLabel.title = dirPath;
   document.getElementById('btn-up').disabled = !result.parent;
+  syncExplorerUpHitState();
 
   const list = document.getElementById('explorer-list');
   list.innerHTML = '';
@@ -745,6 +758,7 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   pathLabel.textContent = prefix ? prefix.split('/').pop() : zipName;
   pathLabel.title = zipName + (prefix ? ' / ' + prefix : '');
   document.getElementById('btn-up').disabled = false;
+  syncExplorerUpHitState();
 
   const list = document.getElementById('explorer-list');
   list.innerHTML = '';

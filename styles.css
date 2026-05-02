@@ -187,6 +187,29 @@ body {
   flex-shrink: 0;
 }
 
+/* ↑ + 경로명 전체 클릭 시 상위로 (btn-up 비활성이면 무시) */
+.explorer-path-up-hit {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+  padding: 2px 4px;
+  margin: -2px -4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.explorer-path-up-hit:hover:not(.is-disabled) {
+  background: var(--surface0);
+}
+.explorer-path-up-hit.is-disabled {
+  cursor: default;
+  opacity: 0.65;
+}
+.explorer-path-up-hit.is-disabled:hover {
+  background: transparent;
+}
+
 #explorer-path-label {
   color: var(--subtext0);
   font-size: 11px;
@@ -194,6 +217,7 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
   flex: 1;
+  min-width: 0;
 }
 
 #explorer-search-wrap {
@@ -680,9 +704,9 @@ body {
   transition: filter 0.16s ease;
 }
 
-/* 앱 내 야간 모드: 윈도우 야간 모드처럼 웜(노란) 톤 */
+/* 앱 내 야간 모드: 웜톤은 sepia·채도 위주(hue 과회전 시 보라색 번짐 방지) */
 body.night-mode .page-img {
-  filter: sepia(0.52) saturate(1.02) hue-rotate(-24deg) brightness(0.90) contrast(0.82);
+  filter: sepia(0.98) saturate(1.14) hue-rotate(-32deg) brightness(0.76) contrast(0.82);
 }
 
 /* 상태바 */
