@@ -165,11 +165,19 @@ let cursorHiddenByIdle = false;
 let toastTimerSeed = 0;
 
 function showToast(message, type = 'info', duration = 2400) {
-  if (!toastLayer || !message) return;
+  const text = (() => {
+    const m = message == null ? '' : String(message).trim();
+    return m === '' ? '알 수 없는 오류' : m;
+  })();
+  const layer = document.getElementById('toast-layer') || toastLayer;
+  if (!layer) {
+    if (type === 'error' || type === 'warn') window.alert(text);
+    return;
+  }
   const toast = document.createElement('div');
   toast.className = `toast toast-${type}`;
-  toast.textContent = message;
-  toastLayer.appendChild(toast);
+  toast.textContent = text;
+  layer.appendChild(toast);
   // reflow to ensure transition
   toast.getBoundingClientRect();
   toast.classList.add('show');
@@ -179,6 +187,31 @@ function showToast(message, type = 'info', duration = 2400) {
     toast.classList.remove('show');
     setTimeout(() => toast.remove(), 180);
   }, duration);
+}
+
+function formatDeleteFail(errOrRes) {
+  if (errOrRes && typeof errOrRes === 'object' && errOrRes.error != null && String(errOrRes.error).trim() !== '') {
+    return String(errOrRes.error).trim();
+  }
+  if (errOrRes instanceof Error && errOrRes.message) return errOrRes.message;
+  return '응답을 확인할 수 없습니다.';
+}
+
+/** 휴지통 실패 시에만 영구 삭제(추가 확인) 시도 */
+async function deleteFileTrashThenPermanent(fullPath) {
+  let res = await window.api.deleteFile(fullPath, {});
+  if (res && res.success) return { ok: true };
+  const detail = formatDeleteFail(res);
+  const doPermanent = confirm(
+    '휴지통으로 보낼 수 없습니다.\n\n' +
+      detail +
+      '\n\n이 항목을 영구 삭제할까요? (복구·휴지통 복원 불가)'
+  );
+  if (!doPermanent) return { ok: false };
+  res = await window.api.deleteFile(fullPath, { permanent: true });
+  if (res && res.success) return { ok: true };
+  showToast('영구 삭제 실패: ' + formatDeleteFail(res), 'error', 5000);
+  return { ok: false };
 }
 
 function showViewerCursor() {
@@ -218,6 +251,21 @@ function applyNightMode(enabled) {
 const explorerState = { path: null, parent: null, currentFile: null, files: [],
   dirs: [], zipMode: false, zipPath: null, zipPrefix: null, activeFolder: null };
 let explorerQuery = '';
+/** 목록이 같은 zip/폴더 위치면 스크롤 유지(권 클릭 후 loadZipImages가 부모 목록만 다시 그릴 때 등) */
+let lastExplorerNavListKey = '';
+function explorerNavKeyDisk(dirPath) {
+  return 'd:' + String(dirPath || '').replace(/\\/g, '/').toLowerCase();
+}
+function explorerNavKeyZip(zipPath, prefix) {
+  return 'z:' + String(zipPath || '').replace(/\\/g, '/').toLowerCase() + '\0' + String(prefix || '').replace(/\\/g, '/').toLowerCase();
+}
+
+/** 탐색기 검색어·필터 초기화(열기/이동 후 검색 상태가 남지 않게) */
+function clearExplorerSearch() {
+  explorerQuery = '';
+  const el = document.getElementById('explorer-search');
+  if (el) el.value = '';
+}
 
 function toggleSection(id) {
   document.getElementById(id).classList.toggle('collapsed');
@@ -241,6 +289,7 @@ function syncExplorerUpHitState() {
 function goExplorerParent() {
   const btnUp = document.getElementById('btn-up');
   if (!btnUp || btnUp.disabled) return;
+  clearExplorerSearch();
   if (explorerState.zipMode) {
     if (explorerState.zipPrefix) {
       const parts = explorerState.zipPrefix.split('/');
@@ -347,6 +396,8 @@ document.getElementById('bulk-rename-input').addEventListener('keydown', (e) => 
 });
 
 async function browseDir(dirPath) {
+  /* 삭제/이름변경은 허용 루트 안에서만 허용됨. loadPath 때만 루트가 잡히면 탐색기로 다른 폴더로 올라갔을 때 삭제가 막힘 */
+  await window.api.setActiveRoot(dirPath);
   const result = await window.api.readDirEntries(dirPath);
   explorerState.path = dirPath;
   explorerState.parent = result.parent;
@@ -364,6 +415,11 @@ async function browseDir(dirPath) {
   syncExplorerUpHitState();
 
   const list = document.getElementById('explorer-list');
+  const navKey = explorerNavKeyDisk(dirPath);
+  const resetScroll = lastExplorerNavListKey !== navKey;
+  lastExplorerNavListKey = navKey;
+  const prevScrollTop = !resetScroll && list ? list.scrollTop : 0;
+
   list.innerHTML = '';
 
   const q = explorerQuery.toLowerCase();
@@ -426,12 +482,25 @@ async function browseDir(dirPath) {
     delBtn.className = 'explorer-action-btn explorer-del-btn';
     delBtn.title = isDir ? '폴더 삭제' : '파일 삭제';
     delBtn.textContent = '🗑';
-    delBtn.addEventListener('click', async () => {
+    delBtn.addEventListener('click', async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (delBtn.disabled) return;
       const label = isDir ? `폴더 "${name}"` : `파일 "${name}"`;
       if (!confirm(`${label}을(를) 휴지통으로 이동할까요?`)) return;
-      const res = await window.api.deleteFile(fullPath);
-      if (res.success) browseDir(dirPath);
-      else showToast('삭제 실패: ' + res.error, 'error', 3200);
+      delBtn.disabled = true;
+      try {
+        if (!window.api || typeof window.api.deleteFile !== 'function') {
+          showToast('삭제 API를 사용할 수 없습니다.', 'error', 4000);
+          return;
+        }
+        const out = await deleteFileTrashThenPermanent(fullPath);
+        if (out.ok) browseDir(dirPath);
+      } catch (err) {
+        showToast('삭제 실패: ' + formatDeleteFail(err), 'error', 4500);
+      } finally {
+        delBtn.disabled = false;
+      }
     });
     wrap.appendChild(delBtn);
 
@@ -464,6 +533,7 @@ async function browseDir(dirPath) {
         if (sec.classList.contains('collapsed')) sec.classList.remove('collapsed');
         return;
       }
+      clearExplorerSearch();
       await browseDir(fullPath);
     });
     list.appendChild(item);
@@ -498,9 +568,17 @@ async function browseDir(dirPath) {
     list.appendChild(item);
   });
 
-  // 현재 열린 파일로 스크롤
-  const activeItem = list.querySelector('.explorer-item.active');
-  if (activeItem) activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
+  if (resetScroll) {
+    list.scrollTop = 0;
+  } else {
+    const activeItem = list.querySelector('.explorer-item.active');
+    if (activeItem) {
+      activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } else {
+      const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTop = Math.min(prevScrollTop, maxScroll);
+    }
+  }
 }
 
 // ── 파일 열기 ─────────────────────────────────────────────
@@ -529,6 +607,13 @@ document.addEventListener('click', () => openDropdown.classList.remove('visible'
 async function loadPath(filePath, options = {}) {
   const mySeq = ++loadSeq;
   const { resetProgress = false } = options;
+  clearExplorerSearch();
+  /* 다른 책/zip을 열 때 이전 페이지·썸네일·file:// 참조를 남기면 OS가 파일을 잡고 있어 삭제가 실패할 수 있음 */
+  state.pages = [];
+  state.current = 0;
+  state.progressKey = '';
+  await buildSidebar();
+  if (mySeq === loadSeq) await render();
   await window.api.setActiveRoot(filePath);
   if (mySeq !== loadSeq) return;
   const type = await window.api.getFileType(filePath);
@@ -575,6 +660,7 @@ async function loadZip(filePath, options = {}) {
 }
 
 async function enterZipDir(zipPath, prefix, options = {}) {
+  clearExplorerSearch();
   const { resetProgress = false, _seq } = options;
   zipBrowseState.prefix = prefix;
   const dir = await window.api.readZipDir(zipPath, prefix);
@@ -590,7 +676,7 @@ async function enterZipDir(zipPath, prefix, options = {}) {
     const displayName = folderLabel ? zipName + ' / ' + folderLabel : zipName;
     await loadZipImages(zipPath, dir.images, displayName, { resetProgress, _seq });
   } else if (dir.folders.length > 0) {
-    showZipFolderPicker(zipPath, prefix, dir.folders);
+    await showZipFolderPicker(zipPath, prefix, dir.folders);
   } else if (!prefix) {
     // 루트에서 이미지/폴더 없음 → inner zip 폴백 (readZipList)
     const entries = await window.api.readZipList(zipPath);
@@ -605,7 +691,16 @@ async function enterZipDir(zipPath, prefix, options = {}) {
   }
 }
 
-function showZipFolderPicker(zipPath, prefix, folders) {
+async function showZipFolderPicker(zipPath, prefix, folders) {
+  state.pages = [];
+  state.current = 0;
+  state.progressKey = '';
+  await buildSidebar();
+  pageLeft.removeAttribute('src');
+  pageRight.removeAttribute('src');
+  pageLeft.src = '';
+  pageRight.src = '';
+
   dropZone.style.display = 'none';
   pagesContainer.style.display = 'none';
 
@@ -761,6 +856,11 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
   syncExplorerUpHitState();
 
   const list = document.getElementById('explorer-list');
+  const navKey = explorerNavKeyZip(zipPath, prefix);
+  const resetScroll = lastExplorerNavListKey !== navKey;
+  lastExplorerNavListKey = navKey;
+  const prevScrollTop = !resetScroll && list ? list.scrollTop : 0;
+
   list.innerHTML = '';
 
   const q = explorerQuery.toLowerCase();
@@ -794,8 +894,17 @@ function browseZipDir(zipPath, prefix, folders, activeFolder) {
     list.appendChild(item);
   });
 
-  const activeItem = list.querySelector('.explorer-item.active');
-  if (activeItem) activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
+  if (resetScroll) {
+    list.scrollTop = 0;
+  } else {
+    const activeItem = list.querySelector('.explorer-item.active');
+    if (activeItem) {
+      activeItem.scrollIntoView({ block: 'center', inline: 'nearest' });
+    } else {
+      const maxScroll = Math.max(0, list.scrollHeight - list.clientHeight);
+      list.scrollTop = Math.min(prevScrollTop, maxScroll);
+    }
+  }
 }
 
 const explorerSearch = document.getElementById('explorer-search');
@@ -827,6 +936,10 @@ async function loadPageImage(page) {
 async function render() {
   document.getElementById('zip-folder-picker').style.display = 'none';
   if (!state.pages.length) {
+    pageLeft.removeAttribute('src');
+    pageRight.removeAttribute('src');
+    pageLeft.src = '';
+    pageRight.src = '';
     dropZone.style.display = 'flex';
     pagesContainer.style.display = 'none';
     viewer.style.cursor = (document.body.classList.contains('fullscreen') && cursorHiddenByIdle) ? 'none' : '';
@@ -1135,18 +1248,28 @@ async function buildSidebar() {
     delBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       if (page.type === 'zip') return;
+      if (delBtn.disabled) return;
       const fileName = page.src.split(/[\\/]/).pop();
       if (!confirm(`"${fileName}" 을 휴지통으로 이동하시겠습니까?`)) return;
-      const result = await window.api.deleteFile(page.src);
-      if (result.success) {
-        const delIdx = state.pages.indexOf(page);
-        if (delIdx >= 0) state.pages.splice(delIdx, 1);
-        if (state.current >= state.pages.length) state.current = Math.max(0, state.pages.length - 1);
-        await buildSidebar();
-        if (state.pages.length > 0) await render();
-        else { dropZone.style.display = 'flex'; pagesContainer.style.display = 'none'; updateUI(); }
-      } else {
-        showToast('삭제 실패: ' + result.error, 'error', 3200);
+      delBtn.disabled = true;
+      try {
+        if (!window.api || typeof window.api.deleteFile !== 'function') {
+          showToast('삭제 API를 사용할 수 없습니다.', 'error', 4000);
+          return;
+        }
+        const out = await deleteFileTrashThenPermanent(page.src);
+        if (out.ok) {
+          const delIdx = state.pages.indexOf(page);
+          if (delIdx >= 0) state.pages.splice(delIdx, 1);
+          if (state.current >= state.pages.length) state.current = Math.max(0, state.pages.length - 1);
+          await buildSidebar();
+          if (state.pages.length > 0) await render();
+          else { dropZone.style.display = 'flex'; pagesContainer.style.display = 'none'; updateUI(); }
+        }
+      } catch (err) {
+        showToast('삭제 실패: ' + formatDeleteFail(err), 'error', 4500);
+      } finally {
+        delBtn.disabled = false;
       }
     });
 

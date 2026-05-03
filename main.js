@@ -203,6 +203,113 @@ function isWithinAllowedRoots(targetPath) {
   });
 }
 
+/** Windows 등에서 shell.trashItem이 일시 실패(Abort)할 때 재시도 */
+async function moveFileToOsTrash(absPath) {
+  const tries = 4;
+  let lastErr = null;
+  for (let i = 0; i < tries; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 120 * i));
+    try {
+      await shell.trashItem(absPath);
+      return { ok: true };
+    } catch (e) {
+      lastErr = e;
+    }
+  }
+  return { ok: false, err: lastErr };
+}
+
+function formatTrashError(err) {
+  const m = (err && err.message) || String(err || '');
+  if (/abort/i.test(m)) {
+    return '휴지통으로 보낼 수 없습니다. 지금 보고 있는 페이지면 다른 쪽으로 넘긴 뒤 다시 시도하거나, 다른 프로그램·탐색기에서 이 파일을 닫아 주세요. OneDrive 폴더는 동기가 끝난 뒤에 시도해 보세요.';
+  }
+  return m || '휴지통 이동에 실패했습니다.';
+}
+
+/** 삭제 경로가 현재 zip 워커가 연 파일이거나 그 하위면 닫기 */
+async function closeZipWorkerIfDeletingPath(absPath) {
+  if (!workerZipKey) return;
+  const absCmp = toCmpPath(normalizePath(absPath));
+  const wkCmp = toCmpPath(workerZipKey);
+  if (wkCmp === absCmp || wkCmp.startsWith(absCmp + path.sep)) {
+    await zipWorkerForceClose();
+  }
+}
+
+function purgeInnerZipCacheForDeletedPath(absPath) {
+  const absCmp = toCmpPath(normalizePath(absPath));
+  const sep = path.sep;
+  for (const k of [...innerZipCache.keys()]) {
+    const idx = k.indexOf('::');
+    const outer = idx >= 0 ? k.slice(0, idx) : k;
+    let oCmp;
+    try {
+      oCmp = toCmpPath(normalizePath(outer));
+    } catch {
+      continue;
+    }
+    if (oCmp === absCmp || oCmp.startsWith(absCmp + sep)) innerZipCache.delete(k);
+  }
+}
+
+function formatPermanentDeleteError(err) {
+  const code = err && err.code;
+  const m = (err && err.message) || String(err || '');
+  const uni = m.match(/unlink\s+[''](.+)['']/i) || m.match(/rmdir\s+[''](.+)['']/i);
+  let fname = '';
+  if (uni) {
+    try {
+      fname = path.basename(uni[1].replace(/^\\\\\?\\/, ''));
+    } catch {}
+  }
+  if (code === 'EBUSY' || /EBUSY|resource busy|locked/i.test(m)) {
+    return (
+      '다른 프로그램이나 Windows 탐색기가 이 파일을 잡고 있어 지울 수 없습니다.' +
+      (fname ? ` 문제 파일: ${fname}` : '') +
+      ' 탐색기에서 해당 폴더 창을 닫거나, 미리보기·속성 창을 닫고, 백신 실시간 검사를 잠시 끈 뒤 다시 시도해 보세요. ' +
+      '`.bat` 파일은 더블클릭으로 실행 중이면 안 됩니다.'
+    );
+  }
+  if (code === 'EPERM' || code === 'EACCES' || /EPERM|EACCES/i.test(m)) {
+    return '권한이 없거나 접근이 거부되었습니다. 다른 프로그램을 종료하거나, 관리자 권한으로 앱을 실행한 뒤 다시 시도해 주세요.';
+  }
+  return m || '삭제에 실패했습니다.';
+}
+
+/** 영구 삭제: 폴더는 Node 내장 재시도, 파일은 EBUSY 시 수동 재시도 */
+async function removePathPermanentlyWithRetry(absPath) {
+  const st = fs.lstatSync(absPath);
+  if (st.isDirectory()) {
+    let lastErr = null;
+    for (let round = 0; round < 5; round++) {
+      if (round > 0) await new Promise(r => setTimeout(r, 350 * round));
+      try {
+        fs.rmSync(absPath, { recursive: true, force: true, maxRetries: 25, retryDelay: 200 });
+        return;
+      } catch (e) {
+        lastErr = e;
+        const c = e && e.code;
+        if (c !== 'EBUSY' && c !== 'ENOTEMPTY' && c !== 'EPERM' && c !== 'EACCES') throw e;
+      }
+    }
+    throw lastErr || new Error('rm dir failed');
+  }
+  let lastErr = null;
+  for (let i = 0; i < 14; i++) {
+    if (i > 0) await new Promise(r => setTimeout(r, 100 + i * 75));
+    try {
+      fs.rmSync(absPath, { force: true });
+      return;
+    } catch (e) {
+      lastErr = e;
+      const c = e && e.code;
+      if (c !== 'EBUSY' && c !== 'EPERM' && c !== 'EACCES') throw e;
+    }
+  }
+  throw lastErr;
+}
+
 async function collectImagePathsRecursive(folderPath, maxFiles) {
   const exts = new Set(['.jpg', '.jpeg', '.png', '.webp', '.gif', '.bmp']);
   const rootResolved = path.resolve(folderPath);
@@ -489,20 +596,24 @@ ipcMain.handle('is-fullscreen', () => {
   return mainWindow.isFullScreen();
 });
 
-// 파일 삭제 (휴지통으로 이동)
-ipcMain.handle('delete-file', async (_, filePath) => {
+// 파일 삭제 (기본: 휴지통, opts.permanent === true 이면 영구 삭제 — 렌더러에서 추가 확인 후만 호출)
+ipcMain.handle('delete-file', async (_, filePath, opts = {}) => {
+  const permanent = opts && opts.permanent === true;
   try {
     if (!isSafePathInput(filePath)) return { success: false, error: 'Invalid path' };
-    if (!isWithinAllowedRoots(filePath)) return { success: false, error: 'Path is outside allowed root' };
-    const zkey = zipCacheKey(filePath);
-    if (workerZipKey === zkey) await zipWorkerForceClose();
-    await shell.trashItem(filePath);
-    for (const k of [...innerZipCache.keys()]) {
-      if (k.startsWith(zkey + '::')) innerZipCache.delete(k);
+    const absPath = normalizePath(filePath);
+    if (!isWithinAllowedRoots(absPath)) return { success: false, error: 'Path is outside allowed root' };
+    await closeZipWorkerIfDeletingPath(absPath);
+    if (permanent) {
+      await removePathPermanentlyWithRetry(absPath);
+    } else {
+      const tr = await moveFileToOsTrash(absPath);
+      if (!tr.ok) return { success: false, error: formatTrashError(tr.err) };
     }
+    purgeInnerZipCacheForDeletedPath(absPath);
     return { success: true };
   } catch (e) {
-    return { success: false, error: e.message };
+    return { success: false, error: permanent ? formatPermanentDeleteError(e) : formatTrashError(e) };
   }
 });
 
@@ -511,12 +622,13 @@ ipcMain.handle('rename-file', async (_, oldPath, newName) => {
   try {
     if (!isSafePathInput(oldPath)) return { success: false, error: 'Invalid path' };
     if (!isSafeNewName(newName)) return { success: false, error: 'Invalid file name' };
-    if (!isWithinAllowedRoots(oldPath)) return { success: false, error: 'Path is outside allowed root' };
-    const dir = path.dirname(oldPath);
+    const absOld = normalizePath(oldPath);
+    if (!isWithinAllowedRoots(absOld)) return { success: false, error: 'Path is outside allowed root' };
+    const dir = path.dirname(absOld);
     const newPath = path.join(dir, newName.trim());
-    const zkey = zipCacheKey(oldPath);
+    const zkey = zipCacheKey(absOld);
     if (workerZipKey === zkey) await zipWorkerForceClose();
-    fs.renameSync(oldPath, newPath);
+    fs.renameSync(absOld, newPath);
     for (const k of [...innerZipCache.keys()]) {
       if (k.startsWith(zkey + '::')) innerZipCache.delete(k);
     }

@@ -13,7 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   getFileType: (filePath) => ipcRenderer.invoke('get-file-type', filePath),
   setActiveRoot: (targetPath) => ipcRenderer.invoke('set-active-root', targetPath),
   readDirEntries: (dirPath) => ipcRenderer.invoke('read-dir-entries', dirPath),
-  deleteFile: (filePath) => ipcRenderer.invoke('delete-file', filePath),
+  deleteFile: (filePath, opts) => ipcRenderer.invoke('delete-file', filePath, opts || {}),
   renameFile: (oldPath, newName) => ipcRenderer.invoke('rename-file', oldPath, newName),
   saveImage: (filePath, dataUrl) => ipcRenderer.invoke('save-image', filePath, dataUrl),
   toggleFullscreen: () => ipcRenderer.invoke('toggle-fullscreen'),
